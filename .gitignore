@@ -10,6 +10,9 @@ __pycache__/
 coverage/
 dist/
 build/
+*.egg-info/
 .cache/
 data/
 *.log
+.xdg/
+.tmp/
