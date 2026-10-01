@@ -28,3 +28,12 @@ Record implementation progress by date:
 - Commit: `72e47b74f598d7701d837d6e9220a1a9ce3dd452` (Add CRM schema and scoped read APIs).
 - Open risks or blockers: Docker engine is unavailable, so full Compose boot and pgvector extension initialization remain unverified. Internal service credentials do not establish end-user identity; the agent gateway must bind an authenticated customer before calling these reads. CRM write authorization, policy, approval, idempotency, and audit behavior are not implemented.
 - Next milestone: Implement CRM scoped write authorization and deterministic refund/cancellation request policy with idempotency and audit tests before enabling sensitive execution.
+
+## 2026-10-01 - CRM action request gate
+
+- Goal and delivered behavior: Added guarded refund and cancellation request creation with a distinct request credential, customer-owned target lookup, deterministic eligibility checks, bounded idempotency keys, atomic creation audit events, policy-denial audit events, and database uniqueness for competing open requests. Requests remain pending; payment balances and subscription states are unchanged.
+- Decisions recorded in `DECISIONS.md`: Persist action requests without executing them.
+- Checks run and results: `uv sync --extra dev --frozen` and `ruff check .` passed; local PostgreSQL 17 `alembic downgrade base` then `upgrade head` passed; seed inserted 37 customers then 0 on repeat; `alembic check` found no drift; `pytest -q` passed 25 tests (one upstream TestClient deprecation warning), including authorization, idempotent retries, competing requests, cross-customer IDs, policy denial, audit, and unchanged financial state; `docker compose config --quiet` and `git diff --check` passed. Docker engine connection failed because the Docker Desktop Linux pipe was absent, so container boot was not tested.
+- Commit: `c7671381c2e81c5ffd33836913836906a2b7e122` (Add guarded CRM action requests).
+- Open risks or blockers: Full Compose boot and pgvector initialization remain unverified without Docker. Customer identity binding, administrator approval/rejection, persisted same-thread resume, and exactly-once financial execution are later gates; no route currently performs a refund or cancellation.
+- Next milestone: Build the logistics order/tracking contract with deterministic service-failure fixtures, while rechecking the open Compose boot gate.
