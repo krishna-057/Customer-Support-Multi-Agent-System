@@ -18,9 +18,10 @@ The central rule is that model output may interpret a request, but backend servi
 ## Current implementation
 
 The backend provides three FastAPI services, PostgreSQL 17/pgvector Compose,
-versioned CRM migrations, deterministic synthetic fixtures, and guarded account
-and billing read contracts. Refund and cancellation routes remain closed until
-backend authorization, idempotency, approval, and audit rules are implemented.
+versioned CRM migrations, deterministic synthetic fixtures, guarded account and
+billing reads, and approval-bound refund/cancellation request creation. Financial
+execution routes remain closed until administrator approval, persisted workflow
+resume, and duplicate-execution protection are implemented.
 See [PLAN.md](PLAN.md) for sequencing and [DECISIONS.md](DECISIONS.md) for tradeoffs.
 
 ## Local development
@@ -35,7 +36,7 @@ uv run ruff check .
 uv run pytest -q
 ```
 
-Copy `.env.example` to ignored `.env` and replace the sample password and both
+Copy `.env.example` to ignored `.env` and replace the sample password and three
 service tokens with unique, distinct local values. Then run `docker compose up
 --build`. The CRM container applies migrations and inserts 37 synthetic
 customers on startup. PostgreSQL data is
@@ -64,4 +65,23 @@ returns account status and subscription summaries. `GET
 refundable minor-unit amounts. Neither route returns payment provider references.
 Missing or invalid tokens fail closed. These are service-to-service contracts;
 the future agent gateway must resolve the authenticated customer before passing
-an ID. Customer-facing sessions must never receive either service token.
+an ID. Customer-facing sessions must never receive any service token.
+
+### Internal action requests
+
+`POST /internal/customers/{customer_id}/refund-requests` accepts a payment ID,
+positive minor-unit amount, reason, and conversation ID. `POST
+/internal/customers/{customer_id}/cancellation-requests` accepts a subscription
+ID, reason, and conversation ID. Both require `Authorization: Bearer
+<CRM_BILLING_REQUEST_TOKEN>` and an `Idempotency-Key` header (8-100 safe
+characters). The request credential is distinct from the read credentials.
+
+The CRM checks customer ownership and deterministic eligibility, writes a
+`pending` request and audit event in one transaction, and returns `201` for a new
+request or `200` for an identical retry. Reusing a key with different data, or
+opening a second action on the same target, returns `409`. Ineligible attempts
+are audited and return `409`; unknown or other-customer resources return `404`.
+These endpoints do not refund a payment or cancel a subscription. The future
+approval workflow must authorize an administrator, persist the decision, resume
+the same conversation, and execute exactly once before those state changes are
+available.

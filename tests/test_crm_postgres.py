@@ -5,10 +5,19 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, inspect, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from support_system.crm_api import app
-from support_system.crm_models import Customer, Invoice, Payment, Subscription
+from support_system.crm_models import (
+    AuditLog,
+    CancellationRequest,
+    Customer,
+    Invoice,
+    Payment,
+    RefundRequest,
+    Subscription,
+)
 from support_system.db import database_url
 from support_system.seed_crm import fixture_id
 
@@ -32,7 +41,8 @@ def test_migrated_schema_and_repeatable_seed():
         } <= set(inspect(engine).get_table_names())
         with Session(engine) as session:
             assert (
-                session.scalar(text("SELECT version_num FROM alembic_version")) == "001_initial_crm"
+                session.scalar(text("SELECT version_num FROM alembic_version"))
+                == "002_open_requests"
             )
             assert session.scalar(select(func.count()).select_from(Customer)) == 37
             assert session.scalar(select(func.count()).select_from(Subscription)) == 37
@@ -58,3 +68,116 @@ def test_postgres_read_contract():
     assert account.json()["customer_id"] == billing.json()["customer_id"] == first
     assert len(billing.json()["payments"]) == 1
     assert other not in billing.text
+
+
+def test_postgres_request_idempotency_and_audit():
+    customer_id = fixture_id("customer", 0)
+    payment_id = fixture_id("payment", 0)
+    url = f"/internal/customers/{customer_id}/refund-requests"
+    headers = {
+        "Authorization": f"Bearer {os.environ['CRM_BILLING_REQUEST_TOKEN']}",
+        "Idempotency-Key": "integration-refund-fixture-0",
+    }
+    body = {
+        "payment_id": payment_id,
+        "amount_cents": 1000,
+        "reason": "service issue",
+        "conversation_id": "integration-thread-0",
+    }
+    with TestClient(app) as client:
+        first = client.post(url, json=body, headers=headers)
+        replay = client.post(url, json=body, headers=headers)
+        competing = client.post(
+            url, json=body, headers={**headers, "Idempotency-Key": "integration-refund-fixture-1"}
+        )
+    assert first.status_code in {200, 201}
+    assert replay.status_code == 200 and replay.json() == first.json()
+    assert competing.status_code == 409
+    engine = create_engine(database_url())
+    try:
+        with Session(engine) as session:
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(RefundRequest)
+                    .where(RefundRequest.payment_id == payment_id)
+                )
+                == 1
+            )
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(AuditLog)
+                    .where(
+                        AuditLog.action == "refund.request_created",
+                        AuditLog.customer_id == customer_id,
+                    )
+                )
+                == 1
+            )
+            payment = session.get(Payment, payment_id)
+            assert payment.refunded_cents == 0 and payment.status == "charged"
+    finally:
+        engine.dispose()
+
+
+def test_postgres_rejects_competing_open_actions():
+    customer_id = fixture_id("customer", 2)
+    payment_id = fixture_id("payment", 2)
+    subscription_id = fixture_id("subscription", 2)
+    engine = create_engine(database_url())
+    try:
+        with Session(engine) as session:
+            for number in (1, 2):
+                session.add(
+                    RefundRequest(
+                        customer_id=customer_id,
+                        payment_id=payment_id,
+                        amount_cents=100,
+                        reason="test",
+                        status="pending",
+                        idempotency_key=f"index-refund-{number}",
+                        conversation_id="index-check",
+                    )
+                )
+                if number == 1:
+                    session.flush()
+            with pytest.raises(IntegrityError):
+                session.flush()
+            session.rollback()
+        with Session(engine) as session:
+            for number in (1, 2):
+                session.add(
+                    CancellationRequest(
+                        customer_id=customer_id,
+                        subscription_id=subscription_id,
+                        reason="test",
+                        status="pending",
+                        idempotency_key=f"index-cancel-{number}",
+                        conversation_id="index-check",
+                    )
+                )
+                if number == 1:
+                    session.flush()
+            with pytest.raises(IntegrityError):
+                session.flush()
+            session.rollback()
+        with Session(engine) as session:
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(RefundRequest)
+                    .where(RefundRequest.idempotency_key.like("index-refund-%"))
+                )
+                == 0
+            )
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(CancellationRequest)
+                    .where(CancellationRequest.idempotency_key.like("index-cancel-%"))
+                )
+                == 0
+            )
+    finally:
+        engine.dispose()

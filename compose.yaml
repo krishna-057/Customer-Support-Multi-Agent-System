@@ -34,6 +34,7 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       CRM_ACCOUNT_READ_TOKEN: ${CRM_ACCOUNT_READ_TOKEN:?set CRM_ACCOUNT_READ_TOKEN in ignored .env}
       CRM_BILLING_READ_TOKEN: ${CRM_BILLING_READ_TOKEN:?set CRM_BILLING_READ_TOKEN in ignored .env}
+      CRM_BILLING_REQUEST_TOKEN: ${CRM_BILLING_REQUEST_TOKEN:?set CRM_BILLING_REQUEST_TOKEN in ignored .env}
     depends_on:
       postgres:
         condition: service_healthy

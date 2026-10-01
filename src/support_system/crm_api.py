@@ -1,4 +1,4 @@
-"""CRM service: guarded internal reads; sensitive writes are still closed."""
+"""CRM service: guarded internal reads and approval-bound action requests."""
 
 import hmac
 import os
@@ -14,11 +14,15 @@ from sqlalchemy.orm import Session
 
 from support_system.contracts import (
     AccountRead,
+    ActionRequestRead,
     BillingRead,
+    CancellationRequestInput,
     HealthResponse,
     HealthStatus,
+    RefundRequestInput,
     ServiceName,
 )
+from support_system.crm_actions import create_cancellation_request, create_refund_request
 from support_system.crm_models import Customer, Invoice, Payment, Subscription
 from support_system.db import get_session
 
@@ -28,13 +32,15 @@ app = FastAPI(title="Support CRM API", version="0.1.0")
 def require_scope(scope: str, authorization: str | None) -> None:
     account_token = os.getenv("CRM_ACCOUNT_READ_TOKEN")
     billing_token = os.getenv("CRM_BILLING_READ_TOKEN")
-    if account_token and billing_token and hmac.compare_digest(account_token, billing_token):
+    request_token = os.getenv("CRM_BILLING_REQUEST_TOKEN")
+    configured = [token for token in (account_token, billing_token, request_token) if token]
+    if len(configured) != len(set(configured)):
         raise HTTPException(status_code=503, detail="CRM unavailable")
-    names = (
-        ("CRM_BILLING_READ_TOKEN",)
-        if scope == "billing"
-        else ("CRM_ACCOUNT_READ_TOKEN", "CRM_BILLING_READ_TOKEN")
-    )
+    names = {
+        "account": ("CRM_ACCOUNT_READ_TOKEN", "CRM_BILLING_READ_TOKEN"),
+        "billing": ("CRM_BILLING_READ_TOKEN",),
+        "request": ("CRM_BILLING_REQUEST_TOKEN",),
+    }[scope]
     valid_tokens = [os.getenv(name) for name in names]
     if not any(valid_tokens):
         raise HTTPException(status_code=503, detail="CRM unavailable")
@@ -53,6 +59,10 @@ def account_scope(authorization: Annotated[str | None, Header()] = None) -> None
 
 def billing_scope(authorization: Annotated[str | None, Header()] = None) -> None:
     require_scope("billing", authorization)
+
+
+def request_scope(authorization: Annotated[str | None, Header()] = None) -> None:
+    require_scope("request", authorization)
 
 
 @app.exception_handler(SQLAlchemyError)
@@ -130,6 +140,60 @@ def billing(customer_id: UUID, session: Annotated[Session, Depends(get_session)]
             }
             for item in payments
         ],
+    }
+
+
+@app.post(
+    "/internal/customers/{customer_id}/refund-requests",
+    dependencies=[Depends(request_scope)],
+    response_model=ActionRequestRead,
+    status_code=201,
+)
+def request_refund(
+    customer_id: UUID,
+    body: RefundRequestInput,
+    response: Response,
+    session: Annotated[Session, Depends(get_session)],
+    idempotency_key: Annotated[
+        str, Header(min_length=8, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+    ],
+) -> dict:
+    item, created = create_refund_request(session, str(customer_id), body, idempotency_key)
+    if not created:
+        response.status_code = 200
+    return {
+        "request_id": item.id,
+        "customer_id": item.customer_id,
+        "target_id": item.payment_id,
+        "action": "refund",
+        "status": item.status,
+    }
+
+
+@app.post(
+    "/internal/customers/{customer_id}/cancellation-requests",
+    dependencies=[Depends(request_scope)],
+    response_model=ActionRequestRead,
+    status_code=201,
+)
+def request_cancellation(
+    customer_id: UUID,
+    body: CancellationRequestInput,
+    response: Response,
+    session: Annotated[Session, Depends(get_session)],
+    idempotency_key: Annotated[
+        str, Header(min_length=8, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+    ],
+) -> dict:
+    item, created = create_cancellation_request(session, str(customer_id), body, idempotency_key)
+    if not created:
+        response.status_code = 200
+    return {
+        "request_id": item.id,
+        "customer_id": item.customer_id,
+        "target_id": item.subscription_id,
+        "action": "cancellation",
+        "status": item.status,
     }
 
 

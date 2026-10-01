@@ -8,9 +8,11 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -85,7 +87,16 @@ class Payment(Base):
 
 class RefundRequest(Base):
     __tablename__ = "refund_requests"
-    __table_args__ = (CheckConstraint("amount_cents > 0", name="refund_amount_positive"),)
+    __table_args__ = (
+        CheckConstraint("amount_cents > 0", name="refund_amount_positive"),
+        Index(
+            "uq_refund_open_payment",
+            "payment_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'approved')"),
+            sqlite_where=text("status IN ('pending', 'approved')"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), nullable=False, index=True)
@@ -101,6 +112,15 @@ class RefundRequest(Base):
 
 class CancellationRequest(Base):
     __tablename__ = "cancellation_requests"
+    __table_args__ = (
+        Index(
+            "uq_cancellation_open_subscription",
+            "subscription_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'approved')"),
+            sqlite_where=text("status IN ('pending', 'approved')"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), nullable=False, index=True)

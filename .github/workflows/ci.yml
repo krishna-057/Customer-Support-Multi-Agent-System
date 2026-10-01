@@ -27,6 +27,7 @@ jobs:
       DB_PASSWORD: ci-only-password
       CRM_ACCOUNT_READ_TOKEN: ci-account-token
       CRM_BILLING_READ_TOKEN: ci-billing-token
+      CRM_BILLING_REQUEST_TOKEN: ci-request-token
       RUN_POSTGRES_TESTS: "1"
     steps:
       - uses: actions/checkout@v4

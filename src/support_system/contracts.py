@@ -2,9 +2,10 @@
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ServiceName(StrEnum):
@@ -80,3 +81,30 @@ class BillingRead(BaseModel):
     customer_id: UUID
     invoices: list[InvoiceRead]
     payments: list[PaymentRead]
+
+
+class RefundRequestInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    payment_id: UUID
+    amount_cents: int = Field(gt=0)
+    reason: str = Field(min_length=3, max_length=500)
+    conversation_id: str = Field(min_length=1, max_length=100)
+
+
+class CancellationRequestInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    subscription_id: UUID
+    reason: str = Field(min_length=3, max_length=500)
+    conversation_id: str = Field(min_length=1, max_length=100)
+
+
+class ActionRequestRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: UUID
+    customer_id: UUID
+    target_id: UUID
+    action: Literal["refund", "cancellation"]
+    status: Literal["pending", "approved", "rejected", "executed"]
