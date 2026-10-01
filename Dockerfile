@@ -1,8 +1,9 @@
 FROM python:3.12-slim
 
 WORKDIR /app
-COPY pyproject.toml requirements.txt README.md ./
+COPY pyproject.toml requirements.txt README.md alembic.ini ./
 COPY src ./src
+COPY migrations ./migrations
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir --no-deps .
 

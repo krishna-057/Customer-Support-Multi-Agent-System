@@ -24,12 +24,16 @@ services:
 
   crm-api:
     <<: *api
-    command: uvicorn support_system.crm_api:app --host 0.0.0.0 --port 8000
+    command: >-
+      sh -c "alembic upgrade head && python -m support_system.seed_crm &&
+      uvicorn support_system.crm_api:app --host 0.0.0.0 --port 8000"
     environment:
       DB_HOST: postgres
       DB_NAME: support
       DB_USER: support
       DB_PASSWORD: ${POSTGRES_PASSWORD}
+      CRM_ACCOUNT_READ_TOKEN: ${CRM_ACCOUNT_READ_TOKEN:?set CRM_ACCOUNT_READ_TOKEN in ignored .env}
+      CRM_BILLING_READ_TOKEN: ${CRM_BILLING_READ_TOKEN:?set CRM_BILLING_READ_TOKEN in ignored .env}
     depends_on:
       postgres:
         condition: service_healthy

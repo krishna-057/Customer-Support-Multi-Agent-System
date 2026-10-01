@@ -7,6 +7,27 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: support
+          POSTGRES_USER: support
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U support -d support"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_NAME: support
+      DB_USER: support
+      DB_PASSWORD: ci-only-password
+      CRM_ACCOUNT_READ_TOKEN: ci-account-token
+      CRM_BILLING_READ_TOKEN: ci-billing-token
+      RUN_POSTGRES_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -16,6 +37,14 @@ jobs:
         run: uv sync --extra dev --frozen
       - name: Lint
         run: uv run ruff check .
+      - name: Migrate and seed CRM
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+          uv run python -m support_system.seed_crm
+          uv run python -m support_system.seed_crm
+          uv run alembic check
       - name: Tests
         run: uv run pytest -q
       - name: Validate Compose

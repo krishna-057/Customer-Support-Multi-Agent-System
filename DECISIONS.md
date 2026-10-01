@@ -29,3 +29,17 @@ Append a dated entry whenever a meaningful design, scope, safety, or deployment 
 - Decision: Use a PostgreSQL 17 image with pgvector 0.8.6, initialize the extension once, bind database files to ignored `./data/postgres`, and bind exposed ports to loopback. Keep the password in ignored `.env`; pass it to CRM as a separate environment field rather than embedding it in a URL.
 - Alternatives considered: A Docker named volume could store data outside the project, and a credential-bearing URL would require escaping passwords with reserved characters.
 - Consequences and validation: Compose syntax validates with a supplied password. Container startup and vector extension creation remain to be verified when Docker is available.
+
+## 2026-10-01 - Gate CRM reads with distinct service credentials
+
+- Context: Account and billing reads are needed before the agent gateway exists. A public customer-ID route would disclose cross-customer data, while financial execution still requires later approval and audit gates.
+- Decision: Add versioned SQLAlchemy/Alembic tables for customers, subscriptions, invoices, payments, action requests, tickets, and audit events. Expose account and billing reads only under `/internal`, with distinct service credentials supplied in the environment. The billing credential may also read account summaries; the account credential cannot read billing records. Both must be configured and different. Every query filters by the requested customer ID. Keep all sensitive write routes closed.
+- Alternatives considered: A caller-supplied customer header or ID alone is spoofable. A shared read token would not distinguish financial access. Building user sessions inside the CRM before the gateway exists would couple two service responsibilities.
+- Consequences and validation: The agent gateway must authenticate the customer and bind its ID before using these contracts; the service credentials must never reach the browser. Contracts omit payment provider references. Tests cover missing/wrong/equal tokens, financial scope, other-customer isolation, 404/422, and real PostgreSQL reads. Approval and execution authorization remain the next gate.
+
+## 2026-10-01 - Seed repeatable synthetic CRM cases
+
+- Context: Billing flows need stable normal and edge-case records for tests and evaluation without using real customer information.
+- Decision: Seed 25 baseline and 12 named edge-case customers with deterministic IDs, Faker-generated display names, `.example.test` addresses, integer minor-unit amounts, and explicit payment/refund balances. Run the seed after migrations; re-running skips existing fixture customers. The first migration also reserves request, ticket, and audit tables with uniqueness and money-bound constraints for later write workflows.
+- Alternatives considered: Random IDs on each run would break repeatable tests; manually entered real-looking contact data creates needless privacy risk. A seed that deletes all existing rows would destroy local work.
+- Consequences and validation: A clean PostgreSQL migration/rollback/re-migration created the tables; seed inserted 37 customers then 0 on repeat, and Alembic reported no schema drift. The local pgvector Compose boot check remains open because Docker is unavailable.
