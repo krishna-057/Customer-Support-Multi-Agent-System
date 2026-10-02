@@ -1,7 +1,6 @@
 """Idempotent, wholly synthetic local CRM fixtures."""
 
 from datetime import UTC, datetime, timedelta
-from uuid import NAMESPACE_URL, uuid5
 
 from faker import Faker
 from sqlalchemy import create_engine
@@ -9,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from support_system.crm_models import Customer, Invoice, Payment, Subscription
 from support_system.db import database_url
+from support_system.fixture_ids import fixture_id
 
 EDGE_CASES = (
     ("past_due", "active", "past_due", "unpaid"),
@@ -24,10 +24,6 @@ EDGE_CASES = (
     ("renewal_due", "active", "active", "paid"),
     ("zero_balance", "active", "active", "paid"),
 )
-
-
-def fixture_id(kind: str, number: int) -> str:
-    return str(uuid5(NAMESPACE_URL, f"customer-support-fixture/{kind}/{number}"))
 
 
 def seed(session: Session) -> int:

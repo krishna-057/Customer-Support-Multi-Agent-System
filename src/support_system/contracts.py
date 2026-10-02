@@ -108,3 +108,36 @@ class ActionRequestRead(BaseModel):
     target_id: UUID
     action: Literal["refund", "cancellation"]
     status: Literal["pending", "approved", "rejected", "executed"]
+
+
+class OrderRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order_id: UUID
+    customer_id: UUID
+    status: Literal["processing", "in_transit", "delivered", "exception"]
+    carrier: str
+    eta_at: datetime | None
+    last_updated_at: datetime
+
+
+class OrderListRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    customer_id: UUID
+    orders: list[OrderRead]
+
+
+class TrackingEventRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: Literal["created", "picked_up", "in_transit", "delivered", "delivery_exception"]
+    description: str
+    occurred_at: datetime
+
+
+class TrackingRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order: OrderRead
+    events: list[TrackingEventRead]

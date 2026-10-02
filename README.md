@@ -19,9 +19,10 @@ The central rule is that model output may interpret a request, but backend servi
 
 The backend provides three FastAPI services, PostgreSQL 17/pgvector Compose,
 versioned CRM migrations, deterministic synthetic fixtures, guarded account and
-billing reads, and approval-bound refund/cancellation request creation. Financial
-execution routes remain closed until administrator approval, persisted workflow
-resume, and duplicate-execution protection are implemented.
+billing reads, approval-bound refund/cancellation request creation, and scoped
+logistics order/tracking reads. Financial execution routes remain closed until
+administrator approval, persisted workflow resume, and duplicate-execution
+protection are implemented.
 See [PLAN.md](PLAN.md) for sequencing and [DECISIONS.md](DECISIONS.md) for tradeoffs.
 
 ## Local development
@@ -36,7 +37,7 @@ uv run ruff check .
 uv run pytest -q
 ```
 
-Copy `.env.example` to ignored `.env` and replace the sample password and three
+Copy `.env.example` to ignored `.env` and replace the sample password and four
 service tokens with unique, distinct local values. Then run `docker compose up
 --build`. The CRM container applies migrations and inserts 37 synthetic
 customers on startup. PostgreSQL data is
@@ -85,3 +86,22 @@ These endpoints do not refund a payment or cancel a subscription. The future
 approval workflow must authorize an administrator, persist the decision, resume
 the same conversation, and execute exactly once before those state changes are
 available.
+
+### Internal logistics reads
+
+`GET /internal/customers/{customer_id}/orders` lists only that customer's
+synthetic orders. `GET /internal/customers/{customer_id}/orders/{order_id}/tracking`
+returns the order summary and ordered tracking events. Both require
+`Authorization: Bearer <LOGISTICS_ORDER_READ_TOKEN>`. Missing or wrong tokens
+return `403`; missing token configuration returns `503`. Unknown and other-customer
+orders both return `404`. The gateway must authenticate the customer and bind its
+ID before calling either endpoint; the service token must stay on the server.
+
+Fixtures share the CRM seed's deterministic customer IDs. Customer 0 has an
+in-transit order 0 and a delivery-exception order 2; customer 1 has delivered
+order 1. For repeatable failure tests, tracking order IDs 90, 91, and 92 for
+customer 0 return `429` (with `Retry-After: 2`), `503`, and `504` respectively.
+The `504` is an emulated upstream timeout response, not a network delay. Obtain
+the IDs with `support_system.fixture_ids.fixture_id("customer"|"order", number)`.
+These fixtures do not appear in order lists. All logistics timestamps are fixed
+test data, not live carrier updates.
