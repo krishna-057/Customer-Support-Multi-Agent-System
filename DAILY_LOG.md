@@ -37,3 +37,12 @@ Record implementation progress by date:
 - Commit: `c7671381c2e81c5ffd33836913836906a2b7e122` (Add guarded CRM action requests).
 - Open risks or blockers: Full Compose boot and pgvector initialization remain unverified without Docker. Customer identity binding, administrator approval/rejection, persisted same-thread resume, and exactly-once financial execution are later gates; no route currently performs a refund or cancellation.
 - Next milestone: Build the logistics order/tracking contract with deterministic service-failure fixtures, while rechecking the open Compose boot gate.
+
+## 2026-10-02 - Logistics order and tracking contract
+
+- Goal and delivered behavior: Added scoped internal order-list and tracking reads with a dedicated logistics service token, shared deterministic customer IDs, three normal order histories, typed responses, and repeatable 403/404/429/503/504 cases. The 504 case emulates an upstream timeout response; no live carrier call or actual network timeout is involved.
+- Decisions recorded in `DECISIONS.md`: Scope deterministic logistics reads by customer.
+- Checks run and results: `uv sync --extra dev --frozen` passed; `ruff check .` passed; initial `pytest -q` passed 27 tests with 4 PostgreSQL tests skipped. A checkout-local PostgreSQL 17 instance then ran `alembic upgrade head`, seeded 37 synthetic customers, and passed `alembic check` with no schema drift; `RUN_POSTGRES_TESTS=1 pytest -q` passed all 31 tests with one upstream Starlette TestClient deprecation warning. `docker compose config --quiet` and `git diff --check` passed. The temporary PostgreSQL instance was stopped.
+- Commit: `54af95e095c68dfab592602a4dea06b312bfdf31` (Add scoped logistics tracking API).
+- Open risks or blockers: Docker Desktop's Linux engine pipe is absent, so full Compose boot and pgvector initialization remain unverified. The gateway still must authenticate and bind customer identity before using the logistics token. The 504 fixture covers an HTTP response, not a real client timeout.
+- Next milestone: Build the support article corpus, pgvector indexing, evidence-bearing retrieval, and low-confidence escalation gate; recheck Compose boot when Docker becomes available.
