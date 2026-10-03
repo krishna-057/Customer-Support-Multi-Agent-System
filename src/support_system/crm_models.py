@@ -3,6 +3,7 @@
 from datetime import datetime
 from uuid import uuid4
 
+from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import (
     JSON,
     CheckConstraint,
@@ -164,3 +165,23 @@ class AuditLog(Base):
     result: Mapped[dict] = mapped_column(JSON, nullable=False)
     conversation_id: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class SupportArticle(Base):
+    __tablename__ = "support_articles"
+    __table_args__ = (
+        Index(
+            "ix_support_articles_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    section: Mapped[str] = mapped_column(String(80), nullable=False)
+    question: Mapped[str] = mapped_column(String(300), nullable=False)
+    answer: Mapped[str] = mapped_column(String(1200), nullable=False)
+    revision: Mapped[str] = mapped_column(String(20), nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(VECTOR(256), nullable=False)

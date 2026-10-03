@@ -24,6 +24,8 @@ mako==1.4.3
     # via alembic
 markupsafe==3.0.3
     # via mako
+pgvector==0.5.0
+    # via customer-support-multi-agent
 psycopg==3.3.6
     # via customer-support-multi-agent
 psycopg-binary==3.3.6 ; implementation_name != 'pypy'

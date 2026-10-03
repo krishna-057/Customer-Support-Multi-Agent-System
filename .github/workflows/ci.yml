@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17
+        image: pgvector/pgvector:0.8.6-pg17
         env:
           POSTGRES_DB: support
           POSTGRES_USER: support
@@ -45,6 +45,8 @@ jobs:
           uv run alembic upgrade head
           uv run python -m support_system.seed_crm
           uv run python -m support_system.seed_crm
+          uv run python -m support_system.seed_articles
+          uv run python -m support_system.seed_articles
           uv run alembic check
       - name: Tests
         run: uv run pytest -q

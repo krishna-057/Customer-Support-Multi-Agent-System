@@ -26,6 +26,7 @@ services:
     <<: *api
     command: >-
       sh -c "alembic upgrade head && python -m support_system.seed_crm &&
+      python -m support_system.seed_articles &&
       uvicorn support_system.crm_api:app --host 0.0.0.0 --port 8000"
     environment:
       DB_HOST: postgres
@@ -52,5 +53,14 @@ services:
   agent-api:
     <<: *api
     command: uvicorn support_system.agent_api:app --host 0.0.0.0 --port 8000
+    environment:
+      DB_HOST: postgres
+      DB_NAME: support
+      DB_USER: support
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      TECHNICAL_RETRIEVAL_TOKEN: ${TECHNICAL_RETRIEVAL_TOKEN:?set TECHNICAL_RETRIEVAL_TOKEN in ignored .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8000:8000"

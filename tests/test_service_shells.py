@@ -21,11 +21,18 @@ def test_liveness_contract(app, service):
     assert response.json() == {"service": service, "status": "ok"}
 
 
-@pytest.mark.parametrize("app", [agent_api.app, logistics_api.app])
+@pytest.mark.parametrize("app", [logistics_api.app])
 def test_stateless_readiness(app):
     response = TestClient(app).get("/health/ready")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+def test_agent_readiness_fails_closed_without_knowledge_database(monkeypatch):
+    monkeypatch.delenv("DB_PASSWORD", raising=False)
+    response = TestClient(agent_api.app).get("/health/ready")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Knowledge base unavailable"}
 
 
 def test_crm_readiness_fails_closed_without_database(monkeypatch):

@@ -17,9 +17,11 @@ from support_system.crm_models import (
     Payment,
     RefundRequest,
     Subscription,
+    SupportArticle,
 )
 from support_system.db import database_url
 from support_system.seed_crm import fixture_id
+from support_system.support_knowledge import answer_technical, seed_articles
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_POSTGRES_TESTS") != "1", reason="requires migrated, seeded PostgreSQL"
@@ -38,16 +40,35 @@ def test_migrated_schema_and_repeatable_seed():
             "cancellation_requests",
             "support_tickets",
             "audit_logs",
+            "support_articles",
         } <= set(inspect(engine).get_table_names())
         with Session(engine) as session:
             assert (
                 session.scalar(text("SELECT version_num FROM alembic_version"))
-                == "002_open_requests"
+                == "003_support_articles"
             )
             assert session.scalar(select(func.count()).select_from(Customer)) == 37
             assert session.scalar(select(func.count()).select_from(Subscription)) == 37
             assert session.scalar(select(func.count()).select_from(Invoice)) == 37
             assert session.scalar(select(func.count()).select_from(Payment)) == 34
+            assert session.scalar(select(func.count()).select_from(SupportArticle)) == 20
+            assert seed_articles(session) == (0, 0)
+    finally:
+        engine.dispose()
+
+
+def test_postgres_vector_index_and_evidence_gate():
+    engine = create_engine(database_url())
+    try:
+        indexes = {item["name"] for item in inspect(engine).get_indexes("support_articles")}
+        assert "ix_support_articles_embedding_hnsw" in indexes
+        with Session(engine) as session:
+            known = answer_technical(session, "Why does a saved support link show a 404 page?")
+            weak = answer_technical(session, "quantum banana orbit topology")
+        assert known.status == "answered"
+        assert known.evidence[0].article_id == "KB-009"
+        assert known.answer.endswith("[KB-009]")
+        assert weak.status == "escalated" and weak.answer is None
     finally:
         engine.dispose()
 

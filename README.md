@@ -20,7 +20,9 @@ The central rule is that model output may interpret a request, but backend servi
 The backend provides three FastAPI services, PostgreSQL 17/pgvector Compose,
 versioned CRM migrations, deterministic synthetic fixtures, guarded account and
 billing reads, approval-bound refund/cancellation request creation, and scoped
-logistics order/tracking reads. Financial execution routes remain closed until
+logistics order/tracking reads. A 20-article synthetic knowledge base has a
+pgvector cosine index and a guarded, evidence-bearing technical answer endpoint.
+Financial execution routes remain closed until
 administrator approval, persisted workflow resume, and duplicate-execution
 protection are implemented.
 See [PLAN.md](PLAN.md) for sequencing and [DECISIONS.md](DECISIONS.md) for tradeoffs.
@@ -37,24 +39,44 @@ uv run ruff check .
 uv run pytest -q
 ```
 
-Copy `.env.example` to ignored `.env` and replace the sample password and four
+Copy `.env.example` to ignored `.env` and replace the sample password and five
 service tokens with unique, distinct local values. Then run `docker compose up
 --build`. The CRM container applies migrations and inserts 37 synthetic
-customers on startup. PostgreSQL data is
+customers and 20 versioned support articles on startup. PostgreSQL data is
 bind-mounted at `./data/postgres`; the pgvector extension is created when the
 database is first initialized. Only loopback ports are exposed: agent API 8000,
 CRM API 8001, logistics API 8002, and PostgreSQL 54329 by default.
 
 Each service exposes `/health/live` and `/health/ready`. CRM readiness queries
-PostgreSQL and returns 503 without a working database. The other readiness
-endpoints currently report process readiness because those service shells have
-no downstream dependencies yet. The image installs pinned runtime dependencies
+PostgreSQL and returns 503 without a working database. Agent readiness requires
+a seeded knowledge base; logistics readiness reports process readiness.
+The image installs pinned runtime dependencies
 from `requirements.txt`, exported from `uv.lock`.
 
 For a separately running PostgreSQL instance, set `DB_HOST`, `DB_PORT`,
 `DB_NAME`, `DB_USER`, and `DB_PASSWORD`, then run `uv run alembic upgrade head`
 and `uv run python -m support_system.seed_crm`. Re-running the seed is safe and
 reports zero new customers. `uv run alembic check` detects schema drift.
+
+Run `uv run python -m support_system.seed_articles` after migration to insert
+or revise the bundled support articles. Repeating the seed leaves unchanged
+articles intact and does not remove other records.
+
+### Technical evidence
+
+`POST /internal/technical/answer` accepts `{"question":"..."}` and requires
+`Authorization: Bearer <TECHNICAL_RETRIEVAL_TOKEN>`. Only the server-side graph
+may use that credential. Known questions return the stored support answer with
+an article-ID citation plus title, section, revision, and confidence metadata.
+Weak matches return `status: escalated`, no answer, and an escalation reason.
+The agent API fails closed with 503 if the knowledge database is unavailable.
+
+The current 256-dimensional hash embedding is deterministic and lexical. It
+does not provide model-level semantic paraphrase understanding. The confidence
+threshold is a conservative local rule, not a calibrated probability; broader
+retrieval evaluation is a later gate. Articles describe a synthetic demo help
+center and should not be presented as live product policy. The database uses a
+pgvector HNSW cosine index, while retrieval ranks candidates by cosine distance.
 
 ### Internal CRM reads
 

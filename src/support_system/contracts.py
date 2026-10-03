@@ -141,3 +141,28 @@ class TrackingRead(BaseModel):
 
     order: OrderRead
     events: list[TrackingEventRead]
+
+
+class TechnicalQuestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=3, max_length=500)
+
+
+class TechnicalEvidenceRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    article_id: str
+    title: str
+    section: str
+    revision: str
+    confidence: float = Field(ge=0, le=1)
+
+
+class TechnicalAnswerRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["answered", "escalated"]
+    answer: str | None
+    evidence: list[TechnicalEvidenceRead]
+    escalation_reason: str | None
