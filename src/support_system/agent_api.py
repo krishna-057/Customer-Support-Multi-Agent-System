@@ -12,6 +12,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from support_system.contracts import (
+    CustomerMessageInput,
+    CustomerMessageRead,
     HealthResponse,
     HealthStatus,
     ServiceName,
@@ -19,8 +21,10 @@ from support_system.contracts import (
     TechnicalQuestion,
 )
 from support_system.crm_models import SupportArticle
+from support_system.customer_identity import CustomerIdentity, require_customer_identity
 from support_system.db import database_url
 from support_system.support_knowledge import answer_technical
+from support_system.workflow_graph import run_message
 
 app = FastAPI(title="Support Agent API", version="0.1.0")
 
@@ -77,3 +81,20 @@ def technical_answer(
     question: TechnicalQuestion, session: Annotated[Session, Depends(knowledge_session)]
 ) -> dict:
     return asdict(answer_technical(session, question.question))
+
+
+@app.post("/v1/support/messages", response_model=CustomerMessageRead)
+def customer_message(
+    request: CustomerMessageInput,
+    identity: Annotated[CustomerIdentity, Depends(require_customer_identity)],
+) -> CustomerMessageRead:
+    state = run_message(identity, request.message, order_id=request.order_id)
+    escalated = state.get("intent") == "escalation"
+    return CustomerMessageRead(
+        status="escalated" if escalated else "answered",
+        intent=state["intent"],
+        answer=state["answer"],
+        evidence=state.get("evidence", []),
+        tracking=state.get("tracking"),
+        escalation_reason=state.get("escalation_reason") if escalated else None,
+    )

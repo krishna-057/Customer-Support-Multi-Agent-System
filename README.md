@@ -6,7 +6,7 @@ GitHub: https://github.com/krishna-057/Customer-Support-Multi-Agent-System
 
 The central rule is that model output may interpret a request, but backend services own identity, authorization, policy, state changes, and audit events. A refund or cancellation must pause for human approval and resume the same thread before the backend executes it.
 
-## Architecture
+## Target architecture
 
 - A FastAPI gateway streams conversation progress through SSE.
 - A stateful graph routes requests to narrow technical, billing, fulfillment, and escalation workflows.
@@ -24,8 +24,8 @@ logistics order/tracking reads. A 20-article synthetic knowledge base has a
 pgvector cosine index and a guarded, evidence-bearing technical answer endpoint.
 Workflow foundations include signed customer-session verification, narrow
 technical/logistics HTTP adapters, and deterministic supervisor, technical,
-fulfillment, and escalation node functions. They are not yet wired into a
-LangGraph or a public conversation endpoint.
+fulfillment, and escalation node functions. A compiled LangGraph now routes
+those nodes behind a signed-session-only message endpoint.
 Financial execution routes remain closed until
 administrator approval, persisted workflow resume, and duplicate-execution
 protection are implemented.
@@ -43,8 +43,9 @@ uv run ruff check .
 uv run pytest -q
 ```
 
-Copy `.env.example` to ignored `.env` and replace the sample password and five
-service tokens with unique, distinct local values. Then run `docker compose up
+Copy `.env.example` to ignored `.env` and replace the sample password, five
+service tokens, and customer session secret with unique, distinct local values.
+Then run `docker compose up
 --build`. The CRM container applies migrations and inserts 37 synthetic
 customers and 20 versioned support articles on startup. PostgreSQL data is
 bind-mounted at `./data/postgres`; the pgvector extension is created when the
@@ -82,7 +83,7 @@ retrieval evaluation is a later gate. Articles describe a synthetic demo help
 center and should not be presented as live product policy. The database uses a
 pgvector HNSW cosine index, while retrieval ranks candidates by cosine distance.
 
-### Workflow boundary under development
+### Workflow boundary
 
 `customer_identity.issue_session` is an internal signing primitive for a future
 authenticated login flow; no public session-issuing route exists. A verified
@@ -93,8 +94,23 @@ customer/order ownership, and return sanitized failure codes. The deterministic
 supervisor escalates ambiguous, billing, explicit-human, and unknown requests.
 The technical node requires evidence; the fulfillment node passes only the
 verified customer ID to the logistics service; the escalation node prepares a
-handoff. These functions are tested independently, but graph wiring,
-conversation persistence, and an authenticated public route remain future work.
+handoff. The graph wires these functions behind an authenticated route;
+conversation persistence and session issuance remain future work.
+
+### Customer workflow
+
+`POST /v1/support/messages` accepts a message (and optional order ID) with a
+short-lived signed customer session in the `Authorization: Bearer` header. The
+gateway derives the customer ID from that session; request JSON cannot select
+another customer. The LangGraph supervisor routes technical questions to the
+evidence-gated answer service, order questions to customer-scoped logistics,
+and billing, mixed, unknown, or explicit-human requests to escalation. Service
+tokens stay on the backend. The response omits internal handoff context.
+
+No public session issuer or login flow exists yet, so this endpoint is only
+usable with a session issued by a trusted integration. The graph has no
+checkpointer or conversation history; each message runs independently.
+Escalation is a response, not a persisted ticket. No billing action executes.
 
 ### Internal CRM reads
 

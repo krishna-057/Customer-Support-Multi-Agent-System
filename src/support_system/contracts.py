@@ -149,6 +149,13 @@ class TechnicalQuestion(BaseModel):
     question: str = Field(min_length=3, max_length=500)
 
 
+class CustomerMessageInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=1, max_length=500)
+    order_id: UUID | None = None
+
+
 class TechnicalEvidenceRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -157,6 +164,17 @@ class TechnicalEvidenceRead(BaseModel):
     section: str
     revision: str
     confidence: float = Field(ge=0, le=1)
+
+
+class CustomerMessageRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["answered", "escalated"]
+    intent: Literal["technical", "fulfillment", "escalation"]
+    answer: str
+    evidence: list[TechnicalEvidenceRead] = Field(default_factory=list)
+    tracking: OrderListRead | TrackingRead | None = None
+    escalation_reason: str | None = None
 
 
 class TechnicalAnswerRead(BaseModel):

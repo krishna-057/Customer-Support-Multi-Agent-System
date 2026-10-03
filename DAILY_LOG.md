@@ -65,3 +65,12 @@ Record implementation progress by date:
 - Commit: `620ea0e3d1f1d53cfbe8c7ceee339e184b119fde` (Add scoped workflow foundations), local only at this point.
 - Open risks or blockers: The sandbox denied outbound GitHub connections on port 443, so fetch and push failed. `uv add langgraph` failed because the sandbox denied the PyPI socket (Windows error 10013); no LangGraph dependency or graph was committed. The Day 6 graph gate remains open, and CI/full PostgreSQL checks for this commit have not run. No session issuer or authenticated public route exists yet.
 - Next milestone: Restore dependency and GitHub access, install and lock LangGraph, wire these nodes into a compiled graph and authenticated endpoint, then run routing/tool and PostgreSQL CI checks before claiming the gate.
+
+## 2026-10-03 - Authenticated workflow graph
+
+- Goal and delivered behavior: Pushed the previously local-only workflow foundation commits, then installed and locked LangGraph, compiled the scoped supervisor/technical/fulfillment/escalation graph, and added a signed-session-only message endpoint. Technical answers require evidence, fulfillment uses the verified customer ID, and billing or ambiguous messages escalate. The endpoint omits internal handoff data; no customer login issuer, checkpoint, persistent ticket, or financial execution exists.
+- Decisions recorded in `DECISIONS.md`: Compile a stateless, scoped LangGraph before approval persistence.
+- Checks run and results: Frozen offline `uv sync`, Ruff, and `git diff --check` passed; `uv run --offline pytest -q` passed 64 tests with 5 PostgreSQL skips. `docker compose config --quiet` passed with placeholder credentials, though Docker could not read the user-level config under the current sandbox. A wheel build passed to a fresh checkout-local `.tmp` directory; writing over the existing ignored `dist` wheel was denied. Full container boot and local pgvector checks remain unverified.
+- Commit: Wire authenticated support workflow (this entry's commit).
+- Open risks or blockers: Session issuance, conversation persistence, durable handoff, billing approval/resume, and rate limiting remain to be built. The Docker Linux engine remains unavailable locally. GitHub CI must validate the final commit.
+- Next milestone: Add persisted billing interrupt, administrator approval/rejection, same-thread resume, and exactly-once CRM execution before opening sensitive actions.
