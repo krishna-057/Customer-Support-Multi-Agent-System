@@ -22,6 +22,10 @@ versioned CRM migrations, deterministic synthetic fixtures, guarded account and
 billing reads, approval-bound refund/cancellation request creation, and scoped
 logistics order/tracking reads. A 20-article synthetic knowledge base has a
 pgvector cosine index and a guarded, evidence-bearing technical answer endpoint.
+Workflow foundations include signed customer-session verification, narrow
+technical/logistics HTTP adapters, and deterministic supervisor, technical,
+fulfillment, and escalation node functions. They are not yet wired into a
+LangGraph or a public conversation endpoint.
 Financial execution routes remain closed until
 administrator approval, persisted workflow resume, and duplicate-execution
 protection are implemented.
@@ -77,6 +81,20 @@ threshold is a conservative local rule, not a calibrated probability; broader
 retrieval evaluation is a later gate. Articles describe a synthetic demo help
 center and should not be presented as live product policy. The database uses a
 pgvector HNSW cosine index, while retrieval ranks candidates by cosine distance.
+
+### Workflow boundary under development
+
+`customer_identity.issue_session` is an internal signing primitive for a future
+authenticated login flow; no public session-issuing route exists. A verified
+short-lived token yields the customer ID used to build workflow state. The
+technical and logistics adapters hold only their respective server-side service
+tokens, set a three-second HTTP timeout, validate response contracts and
+customer/order ownership, and return sanitized failure codes. The deterministic
+supervisor escalates ambiguous, billing, explicit-human, and unknown requests.
+The technical node requires evidence; the fulfillment node passes only the
+verified customer ID to the logistics service; the escalation node prepares a
+handoff. These functions are tested independently, but graph wiring,
+conversation persistence, and an authenticated public route remain future work.
 
 ### Internal CRM reads
 
