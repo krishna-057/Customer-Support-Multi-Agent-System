@@ -55,3 +55,4 @@ Record implementation progress by date:
 - Commit: `a001cc7392324dbd547171692260776845071907` (Add evidence-gated technical retrieval).
 - Open risks or blockers: The pgvector-backed migration and retrieval gate needs an extension-backed CI or Docker run before it can be called fully passed. The app has no authenticated customer chat, graph orchestration, or administrator approval flow yet. The articles describe a synthetic demo help center.
 - Next milestone: Verify the pgvector CI path and Compose boot when possible, then build LangGraph state, routing, and scoped technical/fulfillment/escalation nodes.
+- CI follow-up: The prior logistics commit's CI had passed 31 tests but failed `docker compose config --quiet` because `LOGISTICS_ORDER_READ_TOKEN` was absent from the workflow environment. Added CI-only logistics and technical token placeholders so Compose interpolation can run; the new pgvector-backed CI result is pending.
