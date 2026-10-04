@@ -84,3 +84,12 @@ Record implementation progress by date:
 - Commit: `00d8e952dea07a73ab4585254d2f8f31a9934b41` (Add guarded administrator decisions).
 - Open risks or blockers: No trusted admin login flow or public admin UI exists. The agent still escalates billing; it does not create a checkpointed pending action, resume the same thread, or execute approved actions. Concurrent row-lock behavior and full Compose boot remain unverified locally; CI covered the PostgreSQL decision path but not simultaneous reviewers.
 - Next milestone: Persist billing workflow checkpoints, create requests from customer-scoped tools, interrupt for review, and resume the same thread; open execution only after idempotent backend mutation and adversarial retry tests pass.
+
+## 2026-10-04 - Approved-only mock execution
+
+- Goal and delivered behavior: Added a CRM-only execute credential and endpoint for approved refund/cancellation requests. The CRM binds execution to customer and conversation IDs, rechecks current eligibility under row locks, updates the local mock payment/subscription state and audit event in one transaction, and returns the same result on replay. The agent service does not receive the execute credential; no customer-facing billing workflow or real payment-provider call is enabled.
+- Decisions recorded in `DECISIONS.md`: Make mock execution an approved-only replay-safe CRM operation.
+- Checks run and results: `uv sync --extra dev --frozen --offline`, `ruff check .`, changed-file `ruff format --check`, `docker compose config --quiet` with validation-only credentials, and `git diff --cached --check` passed. Local `pytest -q` passed 74 tests with 7 PostgreSQL tests skipped. GitHub Actions run `37177821279` passed 81 tests on PostgreSQL/pgvector, including simultaneous execution retries with one ledger update and one execution audit, plus migration/drift and Compose validation. Full local Compose boot was not run.
+- Commit: `6e0484d9ab1d7fda14ec7513f9b40bc7693bfc80` (Protect approved CRM execution), pushed directly to `origin/main`.
+- Open risks or blockers: The graph still escalates billing and has no durable checkpoint, human interrupt, or same-thread resume. The isolated execution credential must not be given to agent-api until those gates and end-to-end tests pass. Local full Compose boot remains unverified.
+- Next milestone: Add a customer-scoped billing node with durable checkpoint/interrupt, verify administrator decision and same-thread resume, then connect the already guarded CRM execution tool with replay tests.
