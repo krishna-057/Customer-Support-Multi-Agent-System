@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from support_system.admin_identity import issue_admin_session
 from support_system.crm_api import app
 from support_system.crm_models import (
     AuditLog,
@@ -138,6 +139,55 @@ def test_postgres_request_idempotency_and_audit():
             )
             payment = session.get(Payment, payment_id)
             assert payment.refunded_cents == 0 and payment.status == "charged"
+    finally:
+        engine.dispose()
+
+
+def test_postgres_admin_decision_is_persisted_once(monkeypatch):
+    customer_id = fixture_id("customer", 0)
+    payment_id = fixture_id("payment", 0)
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "ci-admin-session-secret-at-least-32-bytes")
+    admin_id = fixture_id("admin", 0)
+    auth = {
+        "Authorization": f"Bearer {issue_admin_session(admin_id, 'ci-admin-session-secret-at-least-32-bytes')}"
+    }
+    with TestClient(app) as client:
+        created = client.post(
+            f"/internal/customers/{customer_id}/refund-requests",
+            json={
+                "payment_id": payment_id,
+                "amount_cents": 1000,
+                "reason": "service issue",
+                "conversation_id": "integration-thread-0",
+            },
+            headers={
+                "Authorization": f"Bearer {os.environ['CRM_BILLING_REQUEST_TOKEN']}",
+                "Idempotency-Key": "integration-refund-fixture-0",
+            },
+        )
+        assert created.status_code in {200, 201}
+        url = f"/internal/action-requests/refund/{created.json()['request_id']}/decision"
+        first = client.post(url, json={"decision": "approve"}, headers=auth)
+        replay = client.post(url, json={"decision": "approve"}, headers=auth)
+        conflict = client.post(url, json={"decision": "reject"}, headers=auth)
+    assert first.status_code == replay.status_code == 200
+    assert conflict.status_code == 409
+    engine = create_engine(database_url())
+    try:
+        with Session(engine) as session:
+            assert session.get(RefundRequest, created.json()["request_id"]).status == "approved"
+            assert session.get(Payment, payment_id).refunded_cents == 0
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(AuditLog)
+                    .where(
+                        AuditLog.action == "refund.request_approved",
+                        AuditLog.resource_id == created.json()["request_id"],
+                    )
+                )
+                == 1
+            )
     finally:
         engine.dispose()
 

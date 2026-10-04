@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from support_system import crm_api
+from support_system.admin_identity import issue_admin_session
 from support_system.crm_models import (
     AuditLog,
     Base,
@@ -20,6 +21,7 @@ from support_system.crm_models import (
     RefundRequest,
     Subscription,
 )
+from support_system.customer_identity import issue_session
 from support_system.db import get_session
 
 
@@ -28,6 +30,7 @@ def crm(monkeypatch):
     monkeypatch.setenv("CRM_ACCOUNT_READ_TOKEN", "account-secret")
     monkeypatch.setenv("CRM_BILLING_READ_TOKEN", "billing-secret")
     monkeypatch.setenv("CRM_BILLING_REQUEST_TOKEN", "request-secret")
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", "admin-secret-that-is-at-least-32-bytes-long")
     engine = create_engine(
         "sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -118,6 +121,11 @@ def cancellation_body(subscription_id: str) -> dict:
         "reason": "no longer needed",
         "conversation_id": "thread-2",
     }
+
+
+def admin_headers(admin_id=None) -> dict:
+    token = issue_admin_session(admin_id or uuid4(), "admin-secret-that-is-at-least-32-bytes-long")
+    return {"Authorization": f"Bearer {token}"}
 
 
 def test_request_scope_and_validation_fail_closed(crm):
@@ -227,3 +235,97 @@ def test_inactive_customer_cannot_request_cancellation(crm):
     with Session(engine) as session:
         assert session.scalar(select(func.count()).select_from(CancellationRequest)) == 0
         assert session.scalar(select(AuditLog.action)) == "cancellation.request_denied"
+
+
+def test_admin_refund_decision_is_scoped_audited_and_does_not_execute(crm):
+    client, engine, first, _, payments, _ = crm
+    created = client.post(
+        f"/internal/customers/{first}/refund-requests",
+        json=refund_body(payments[first]),
+        headers=headers("refund-decision-1"),
+    )
+    request_id = created.json()["request_id"]
+    url = f"/internal/action-requests/refund/{request_id}/decision"
+    admin_id = uuid4()
+    auth = admin_headers(admin_id)
+    customer_token = issue_session(uuid4(), "admin-secret-that-is-at-least-32-bytes-long")
+
+    assert client.post(url, json={"decision": "approve"}).status_code == 401
+    assert (
+        client.post(
+            url, json={"decision": "approve"}, headers=headers("refund-decision-2")
+        ).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            url,
+            json={"decision": "approve"},
+            headers={"Authorization": f"Bearer {customer_token}"},
+        ).status_code
+        == 401
+    )
+    assert client.post(url, json={"decision": "override"}, headers=auth).status_code == 422
+    approved = client.post(url, json={"decision": "approve"}, headers=auth)
+    replay = client.post(url, json={"decision": "approve"}, headers=admin_headers())
+    conflict = client.post(url, json={"decision": "reject"}, headers=auth)
+    assert approved.status_code == replay.status_code == 200
+    assert approved.json() == replay.json()
+    assert approved.json()["status"] == "approved"
+    assert conflict.status_code == 409
+    with Session(engine) as session:
+        request = session.get(RefundRequest, request_id)
+        payment = session.get(Payment, payments[first])
+        audits = session.scalars(select(AuditLog).order_by(AuditLog.created_at)).all()
+        assert request.status == "approved" and request.execution_reference is None
+        assert (payment.refunded_cents, payment.status) == (500, "charged")
+        assert len(audits) == 2
+        decision = next(audit for audit in audits if audit.action == "refund.request_approved")
+        assert (decision.actor_type, decision.actor_id) == ("admin", str(admin_id))
+        assert decision.conversation_id == "thread-1"
+
+
+def test_admin_cancellation_rejection_cannot_be_reversed(crm):
+    client, engine, first, _, _, subscriptions = crm
+    created = client.post(
+        f"/internal/customers/{first}/cancellation-requests",
+        json=cancellation_body(subscriptions[first]),
+        headers=headers("cancel-decision-1"),
+    )
+    request_id = created.json()["request_id"]
+    url = f"/internal/action-requests/cancellation/{request_id}/decision"
+    auth = admin_headers()
+    assert (
+        client.post(url, json={"decision": "reject"}, headers=auth).json()["status"] == "rejected"
+    )
+    assert client.post(url, json={"decision": "reject"}, headers=auth).status_code == 200
+    assert client.post(url, json={"decision": "approve"}, headers=auth).status_code == 409
+    assert (
+        client.post(
+            f"/internal/action-requests/cancellation/{uuid4()}/decision",
+            json={"decision": "approve"},
+            headers=auth,
+        ).status_code
+        == 404
+    )
+    with Session(engine) as session:
+        subscription = session.get(Subscription, subscriptions[first])
+        assert subscription.status == "active" and subscription.cancelled_at is None
+        assert session.scalar(select(func.count()).select_from(AuditLog)) == 2
+        decision = session.scalar(
+            select(AuditLog).where(AuditLog.action == "cancellation.request_rejected")
+        )
+        assert decision.actor_type == "admin"
+
+
+def test_admin_decision_fails_closed_without_secret(crm, monkeypatch):
+    client, engine, _, _, _, _ = crm
+    monkeypatch.delenv("ADMIN_SESSION_SECRET")
+    response = client.post(
+        f"/internal/action-requests/refund/{uuid4()}/decision",
+        json={"decision": "approve"},
+        headers=admin_headers(),
+    )
+    assert response.status_code == 503
+    with Session(engine) as session:
+        assert session.scalar(select(func.count()).select_from(AuditLog)) == 0

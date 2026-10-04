@@ -57,12 +57,11 @@ def _key(secret: str) -> bytes:
     return encoded
 
 
-def issue_session(customer_id: UUID, secret: str, *, now: int | None = None) -> str:
-    """Internal issuer for a future authenticated login flow and test fixtures."""
+def _issue_identity(identity_id: UUID, secret: str, issuer: str, *, now: int | None = None) -> str:
     issued_at = int(time.time()) if now is None else now
     payload = {
-        "iss": ISSUER,
-        "sub": str(customer_id),
+        "iss": issuer,
+        "sub": str(identity_id),
         "iat": issued_at,
         "exp": issued_at + MAX_LIFETIME_SECONDS,
     }
@@ -71,7 +70,14 @@ def issue_session(customer_id: UUID, secret: str, *, now: int | None = None) -> 
     return f"{body}.{signature}"
 
 
-def verify_session(token: str, secret: str, *, now: int | None = None) -> CustomerIdentity:
+def issue_session(customer_id: UUID, secret: str, *, now: int | None = None) -> str:
+    """Internal issuer for a future authenticated login flow and test fixtures."""
+    return _issue_identity(customer_id, secret, ISSUER, now=now)
+
+
+def _verify_identity(
+    token: str, secret: str, issuer: str, *, now: int | None = None
+) -> tuple[UUID, int, int]:
     if len(token) > 2048 or token.count(".") != 1:
         raise InvalidSession("Invalid session")
     body, signature = token.split(".")
@@ -84,7 +90,7 @@ def verify_session(token: str, secret: str, *, now: int | None = None) -> Custom
         payload = json.loads(raw_body)
         if not isinstance(payload, dict) or set(payload) != {"iss", "sub", "iat", "exp"}:
             raise InvalidSession("Invalid session")
-        if payload["iss"] != ISSUER or not isinstance(payload["sub"], str):
+        if payload["iss"] != issuer or not isinstance(payload["sub"], str):
             raise InvalidSession("Invalid session")
         issued_at, expires_at = payload["iat"], payload["exp"]
         if type(issued_at) is not int or type(expires_at) is not int:
@@ -96,11 +102,16 @@ def verify_session(token: str, secret: str, *, now: int | None = None) -> Custom
             or expires_at - issued_at > MAX_LIFETIME_SECONDS
         ):
             raise InvalidSession("Invalid session")
-        customer_id = UUID(payload["sub"])
-        if str(customer_id) != payload["sub"]:
+        identity_id = UUID(payload["sub"])
+        if str(identity_id) != payload["sub"]:
             raise InvalidSession("Invalid session")
     except (UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
         raise InvalidSession("Invalid session") from exc
+    return identity_id, issued_at, expires_at
+
+
+def verify_session(token: str, secret: str, *, now: int | None = None) -> CustomerIdentity:
+    customer_id, issued_at, expires_at = _verify_identity(token, secret, ISSUER, now=now)
     return CustomerIdentity(customer_id, issued_at, expires_at)
 
 

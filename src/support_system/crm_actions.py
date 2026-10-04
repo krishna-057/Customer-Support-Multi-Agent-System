@@ -30,12 +30,14 @@ def _audit(
     conversation_id: str,
     request_payload: dict,
     outcome: dict,
+    actor_type: str = "service",
+    actor_id: str = "billing-agent",
 ) -> None:
     session.add(
         AuditLog(
             customer_id=customer_id,
-            actor_type="service",
-            actor_id="billing-agent",
+            actor_type=actor_type,
+            actor_id=actor_id,
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,
@@ -231,3 +233,35 @@ def create_cancellation_request(
             return existing, False
         raise HTTPException(status_code=409, detail="Action already requested") from None
     return request, True
+
+
+def decide_action_request(
+    session: Session, action: str, request_id: str, decision: str, admin_id: str
+) -> tuple[RefundRequest | CancellationRequest, bool]:
+    model = RefundRequest if action == "refund" else CancellationRequest
+    item = session.scalar(select(model).where(model.id == request_id).with_for_update())
+    if item is None:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    status = "approved" if decision == "approve" else "rejected"
+    if item.status == status:
+        return item, False
+    if item.status != "pending":
+        raise HTTPException(status_code=409, detail="Request already decided")
+
+    item.status = status
+    _audit(
+        session,
+        customer_id=item.customer_id,
+        action=f"{action}.request_{status}",
+        resource_type=f"{action}_request",
+        resource_id=item.id,
+        event_key=item.id,
+        conversation_id=item.conversation_id,
+        request_payload={},
+        outcome={"status": status},
+        actor_type="admin",
+        actor_id=admin_id,
+    )
+    session.commit()
+    return item, True

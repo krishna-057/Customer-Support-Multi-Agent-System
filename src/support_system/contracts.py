@@ -110,6 +110,12 @@ class ActionRequestRead(BaseModel):
     status: Literal["pending", "approved", "rejected", "executed"]
 
 
+class ActionDecisionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["approve", "reject"]
+
+
 class OrderRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

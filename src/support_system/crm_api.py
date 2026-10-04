@@ -2,7 +2,7 @@
 
 import hmac
 import os
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 import psycopg
@@ -12,8 +12,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from support_system.admin_identity import AdminIdentity, require_admin_identity
 from support_system.contracts import (
     AccountRead,
+    ActionDecisionInput,
     ActionRequestRead,
     BillingRead,
     CancellationRequestInput,
@@ -22,7 +24,11 @@ from support_system.contracts import (
     RefundRequestInput,
     ServiceName,
 )
-from support_system.crm_actions import create_cancellation_request, create_refund_request
+from support_system.crm_actions import (
+    create_cancellation_request,
+    create_refund_request,
+    decide_action_request,
+)
 from support_system.crm_models import Customer, Invoice, Payment, Subscription
 from support_system.db import get_session
 
@@ -193,6 +199,32 @@ def request_cancellation(
         "customer_id": item.customer_id,
         "target_id": item.subscription_id,
         "action": "cancellation",
+        "status": item.status,
+    }
+
+
+@app.post(
+    "/internal/action-requests/{action}/{request_id}/decision",
+    response_model=ActionRequestRead,
+)
+def decide_request(
+    action: Literal["refund", "cancellation"],
+    request_id: UUID,
+    body: ActionDecisionInput,
+    response: Response,
+    session: Annotated[Session, Depends(get_session)],
+    admin: Annotated[AdminIdentity, Depends(require_admin_identity)],
+) -> dict:
+    item, changed = decide_action_request(
+        session, action, str(request_id), body.decision, str(admin.admin_id)
+    )
+    if not changed:
+        response.status_code = 200
+    return {
+        "request_id": item.id,
+        "customer_id": item.customer_id,
+        "target_id": item.payment_id if action == "refund" else item.subscription_id,
+        "action": action,
         "status": item.status,
     }
 

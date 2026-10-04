@@ -26,8 +26,9 @@ Workflow foundations include signed customer-session verification, narrow
 technical/logistics HTTP adapters, and deterministic supervisor, technical,
 fulfillment, and escalation node functions. A compiled LangGraph now routes
 those nodes behind a signed-session-only message endpoint.
-Financial execution routes remain closed until
-administrator approval, persisted workflow resume, and duplicate-execution
+The CRM can now persist an administrator's approve/reject decision on a pending
+request without changing payment or subscription state. Financial execution
+routes remain closed until persisted workflow resume and duplicate-execution
 protection are implemented.
 See [PLAN.md](PLAN.md) for sequencing and [DECISIONS.md](DECISIONS.md) for tradeoffs.
 
@@ -44,7 +45,7 @@ uv run pytest -q
 ```
 
 Copy `.env.example` to ignored `.env` and replace the sample password, five
-service tokens, and customer session secret with unique, distinct local values.
+service tokens, and customer/admin session secrets with unique, distinct local values.
 Then run `docker compose up
 --build`. The CRM container applies migrations and inserts 37 synthetic
 customers and 20 versioned support articles on startup. PostgreSQL data is
@@ -139,9 +140,19 @@ request or `200` for an identical retry. Reusing a key with different data, or
 opening a second action on the same target, returns `409`. Ineligible attempts
 are audited and return `409`; unknown or other-customer resources return `404`.
 These endpoints do not refund a payment or cancel a subscription. The future
-approval workflow must authorize an administrator, persist the decision, resume
-the same conversation, and execute exactly once before those state changes are
-available.
+workflow must resume the same conversation and execute exactly once before
+those state changes are available.
+
+`POST /internal/action-requests/{refund|cancellation}/{request_id}/decision`
+accepts `{"decision":"approve"}` or `{"decision":"reject"}` with a short-lived
+signed administrator session in `Authorization: Bearer`. The administrator ID
+comes from the verified session, never request JSON. Only a pending request may
+transition; a matching retry returns the existing decision without a second
+audit event, while a conflicting retry returns `409`. The request row is locked
+during the decision and its audit insert in PostgreSQL. Neither decision
+changes a payment balance or subscription. `admin_identity.issue_admin_session`
+is an internal signing primitive, not a public login route; a trusted admin
+login flow and checkpointed billing workflow are still required.
 
 ### Internal logistics reads
 
