@@ -75,3 +75,12 @@ Record implementation progress by date:
 - CI follow-up: GitHub Actions run `37135500016` passed the backend job, including frozen dependency install, lint, PostgreSQL/pgvector migration and seed checks, the full test step, and Compose validation. This does not replace a local full Compose boot.
 - Open risks or blockers: Session issuance, conversation persistence, durable handoff, billing approval/resume, and rate limiting remain to be built. The Docker Linux engine remains unavailable locally.
 - Next milestone: Add persisted billing interrupt, administrator approval/rejection, same-thread resume, and exactly-once CRM execution before opening sensitive actions.
+
+## 2026-10-04 - Administrator decision boundary
+
+- Goal and delivered behavior: Added a signed administrator session verifier separate from customer sessions and an internal CRM approve/reject endpoint for pending refund and cancellation requests. PostgreSQL locks the request row while persisting the decision and administrator-attributed audit event. Matching retries return the existing decision; contradictory decisions fail. Payment balances and subscription status remain unchanged. This is a partial billing gate, not an executable refund/cancellation workflow.
+- Decisions recorded in `DECISIONS.md`: Persist administrator decisions before financial execution.
+- Checks run and results: `uv sync --extra dev --frozen --offline`, `ruff check .`, changed-file `ruff format --check`, `docker compose config --quiet` with validation-only credentials, and `git diff --cached --check` passed. Local `pytest -q` passed 67 tests with 6 PostgreSQL tests skipped because a pgvector-backed database was not running. Added a PostgreSQL integration test for decision persistence, replay, audit uniqueness, and unchanged balance; its result is pending CI. Full Compose boot was not run locally.
+- Commit: `00d8e952dea07a73ab4585254d2f8f31a9934b41` (Add guarded administrator decisions).
+- Open risks or blockers: No trusted admin login issuer or public admin UI exists. The agent still escalates billing; it does not create a checkpointed pending action, resume the same thread, or execute approved actions. Local PostgreSQL row locking and full Compose boot remain unverified. CI must pass before this slice is treated as green.
+- Next milestone: Persist billing workflow checkpoints, create requests from customer-scoped tools, interrupt for review, and resume the same thread; open execution only after idempotent backend mutation and adversarial retry tests pass.
