@@ -16,6 +16,7 @@ from support_system.admin_identity import AdminIdentity, require_admin_identity
 from support_system.contracts import (
     AccountRead,
     ActionDecisionInput,
+    ActionExecutionInput,
     ActionRequestRead,
     BillingRead,
     CancellationRequestInput,
@@ -28,6 +29,7 @@ from support_system.crm_actions import (
     create_cancellation_request,
     create_refund_request,
     decide_action_request,
+    execute_action_request,
 )
 from support_system.crm_models import Customer, Invoice, Payment, Subscription
 from support_system.db import get_session
@@ -39,13 +41,17 @@ def require_scope(scope: str, authorization: str | None) -> None:
     account_token = os.getenv("CRM_ACCOUNT_READ_TOKEN")
     billing_token = os.getenv("CRM_BILLING_READ_TOKEN")
     request_token = os.getenv("CRM_BILLING_REQUEST_TOKEN")
-    configured = [token for token in (account_token, billing_token, request_token) if token]
+    execute_token = os.getenv("CRM_BILLING_EXECUTE_TOKEN")
+    configured = [
+        token for token in (account_token, billing_token, request_token, execute_token) if token
+    ]
     if len(configured) != len(set(configured)):
         raise HTTPException(status_code=503, detail="CRM unavailable")
     names = {
         "account": ("CRM_ACCOUNT_READ_TOKEN", "CRM_BILLING_READ_TOKEN"),
         "billing": ("CRM_BILLING_READ_TOKEN",),
         "request": ("CRM_BILLING_REQUEST_TOKEN",),
+        "execute": ("CRM_BILLING_EXECUTE_TOKEN",),
     }[scope]
     valid_tokens = [os.getenv(name) for name in names]
     if not any(valid_tokens):
@@ -69,6 +75,10 @@ def billing_scope(authorization: Annotated[str | None, Header()] = None) -> None
 
 def request_scope(authorization: Annotated[str | None, Header()] = None) -> None:
     require_scope("request", authorization)
+
+
+def execute_scope(authorization: Annotated[str | None, Header()] = None) -> None:
+    require_scope("execute", authorization)
 
 
 @app.exception_handler(SQLAlchemyError)
@@ -220,6 +230,30 @@ def decide_request(
     )
     if not changed:
         response.status_code = 200
+    return {
+        "request_id": item.id,
+        "customer_id": item.customer_id,
+        "target_id": item.payment_id if action == "refund" else item.subscription_id,
+        "action": action,
+        "status": item.status,
+    }
+
+
+@app.post(
+    "/internal/customers/{customer_id}/action-requests/{action}/{request_id}/execute",
+    dependencies=[Depends(execute_scope)],
+    response_model=ActionRequestRead,
+)
+def execute_request(
+    customer_id: UUID,
+    action: Literal["refund", "cancellation"],
+    request_id: UUID,
+    body: ActionExecutionInput,
+    session: Annotated[Session, Depends(get_session)],
+) -> dict:
+    item = execute_action_request(
+        session, str(customer_id), action, str(request_id), body.conversation_id
+    )
     return {
         "request_id": item.id,
         "customer_id": item.customer_id,

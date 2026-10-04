@@ -1,6 +1,7 @@
 """PostgreSQL migration and seed smoke tests, enabled by RUN_POSTGRES_TESTS=1."""
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
@@ -184,6 +185,77 @@ def test_postgres_admin_decision_is_persisted_once(monkeypatch):
                     .where(
                         AuditLog.action == "refund.request_approved",
                         AuditLog.resource_id == created.json()["request_id"],
+                    )
+                )
+                == 1
+            )
+    finally:
+        engine.dispose()
+
+
+def test_postgres_concurrent_refund_execution_is_single_write():
+    customer_id = fixture_id("customer", 1)
+    payment_id = fixture_id("payment", 1)
+    with TestClient(app) as client:
+        created = client.post(
+            f"/internal/customers/{customer_id}/refund-requests",
+            json={
+                "payment_id": payment_id,
+                "amount_cents": 2000,
+                "reason": "service issue",
+                "conversation_id": "integration-execution-thread-1",
+            },
+            headers={
+                "Authorization": f"Bearer {os.environ['CRM_BILLING_REQUEST_TOKEN']}",
+                "Idempotency-Key": "integration-execute-fixture-1",
+            },
+        )
+        assert created.status_code == 201
+        request_id = created.json()["request_id"]
+        decision = client.post(
+            f"/internal/action-requests/refund/{request_id}/decision",
+            json={"decision": "approve"},
+            headers={
+                "Authorization": f"Bearer {issue_admin_session(fixture_id('admin', 1), os.environ['ADMIN_SESSION_SECRET'])}"
+            },
+        )
+        assert decision.status_code == 200
+
+    url = f"/internal/customers/{customer_id}/action-requests/refund/{request_id}/execute"
+    headers = {"Authorization": f"Bearer {os.environ['CRM_BILLING_EXECUTE_TOKEN']}"}
+
+    def execute():
+        with TestClient(app) as client:
+            return client.post(
+                url, json={"conversation_id": "integration-execution-thread-1"}, headers=headers
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(execute) for _ in range(2)]
+        responses = [future.result(timeout=20) for future in futures]
+    assert [response.status_code for response in responses] == [200, 200]
+    assert all(response.json()["status"] == "executed" for response in responses)
+
+    engine = create_engine(database_url())
+    try:
+        with Session(engine) as session:
+            payment = session.get(Payment, payment_id)
+            invoice = session.get(Invoice, payment.invoice_id)
+            request = session.get(RefundRequest, request_id)
+            assert (payment.refunded_cents, payment.status, invoice.status) == (
+                2000,
+                "refunded",
+                "refunded",
+            )
+            assert request.status == "executed"
+            assert request.execution_reference == f"mock-refund:{request_id}"
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(AuditLog)
+                    .where(
+                        AuditLog.action == "refund.executed",
+                        AuditLog.resource_id == request_id,
                     )
                 )
                 == 1

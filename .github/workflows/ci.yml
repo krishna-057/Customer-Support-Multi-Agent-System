@@ -28,6 +28,7 @@ jobs:
       CRM_ACCOUNT_READ_TOKEN: ci-account-token
       CRM_BILLING_READ_TOKEN: ci-billing-token
       CRM_BILLING_REQUEST_TOKEN: ci-request-token
+      CRM_BILLING_EXECUTE_TOKEN: ci-execute-token
       LOGISTICS_ORDER_READ_TOKEN: ci-logistics-token
       TECHNICAL_RETRIEVAL_TOKEN: ci-technical-token
       CUSTOMER_SESSION_SECRET: ci-only-session-secret-at-least-32-bytes

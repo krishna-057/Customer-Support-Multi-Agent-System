@@ -1,5 +1,6 @@
 """Deterministic CRM request policy, idempotency, and audit persistence."""
 
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -16,6 +17,7 @@ from support_system.crm_models import (
     Payment,
     RefundRequest,
     Subscription,
+    utc_now,
 )
 
 
@@ -265,3 +267,119 @@ def decide_action_request(
     )
     session.commit()
     return item, True
+
+
+def _execution_blocked(
+    session: Session,
+    item: RefundRequest | CancellationRequest,
+    action: str,
+    code: str,
+) -> None:
+    existing = session.scalar(
+        select(AuditLog).where(
+            AuditLog.action == f"{action}.execution_blocked",
+            AuditLog.resource_type == f"{action}_request",
+            AuditLog.resource_id == item.id,
+            AuditLog.event_key == item.id,
+        )
+    )
+    if existing is None:
+        _audit(
+            session,
+            customer_id=item.customer_id,
+            action=f"{action}.execution_blocked",
+            resource_type=f"{action}_request",
+            resource_id=item.id,
+            event_key=item.id,
+            conversation_id=item.conversation_id,
+            request_payload={},
+            outcome={"code": code},
+            actor_id="billing-executor",
+        )
+        session.commit()
+    raise HTTPException(status_code=409, detail="Action no longer eligible")
+
+
+def execute_action_request(
+    session: Session,
+    customer_id: str,
+    action: Literal["refund", "cancellation"],
+    request_id: str,
+    conversation_id: str,
+) -> RefundRequest | CancellationRequest:
+    model = RefundRequest if action == "refund" else CancellationRequest
+    item = session.scalar(
+        select(model)
+        .where(model.id == request_id, model.customer_id == customer_id)
+        .with_for_update()
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if item.conversation_id != conversation_id:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if item.status == "executed":
+        return item
+    if item.status != "approved":
+        raise HTTPException(status_code=409, detail="Request not approved")
+
+    customer = session.scalar(select(Customer).where(Customer.id == customer_id).with_for_update())
+    if customer is None or customer.account_status != "active":
+        _execution_blocked(session, item, action, "account_inactive")
+
+    if action == "refund":
+        payment = session.scalar(
+            select(Payment)
+            .where(Payment.id == item.payment_id, Payment.customer_id == customer_id)
+            .with_for_update()
+        )
+        if payment is None:
+            _execution_blocked(session, item, action, "payment_unavailable")
+        invoice = session.scalar(
+            select(Invoice)
+            .where(Invoice.id == payment.invoice_id, Invoice.customer_id == customer_id)
+            .with_for_update()
+        )
+        if (
+            invoice is None
+            or invoice.status != "paid"
+            or payment.status != "charged"
+            or item.amount_cents > payment.amount_cents - payment.refunded_cents
+        ):
+            _execution_blocked(session, item, action, "refund_ineligible")
+        payment.refunded_cents += item.amount_cents
+        if payment.refunded_cents == payment.amount_cents:
+            payment.status = "refunded"
+            invoice.status = "refunded"
+        item.execution_reference = f"mock-refund:{item.id}"
+        outcome = {"status": "executed", "amount_cents": item.amount_cents}
+    else:
+        subscription = session.scalar(
+            select(Subscription)
+            .where(Subscription.id == item.subscription_id, Subscription.customer_id == customer_id)
+            .with_for_update()
+        )
+        if (
+            subscription is None
+            or subscription.status != "active"
+            or subscription.cancelled_at is not None
+        ):
+            _execution_blocked(session, item, action, "subscription_ineligible")
+        subscription.status = "cancelled"
+        subscription.cancelled_at = utc_now()
+        outcome = {"status": "executed"}
+
+    item.status = "executed"
+    _audit(
+        session,
+        customer_id=customer_id,
+        action=f"{action}.executed",
+        resource_type=f"{action}_request",
+        resource_id=item.id,
+        event_key=item.id,
+        conversation_id=item.conversation_id,
+        request_payload={},
+        outcome=outcome,
+        actor_id="billing-executor",
+    )
+    session.commit()
+    return item

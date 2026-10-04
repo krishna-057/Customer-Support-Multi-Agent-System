@@ -28,8 +28,9 @@ fulfillment, and escalation node functions. A compiled LangGraph now routes
 those nodes behind a signed-session-only message endpoint.
 The CRM can now persist an administrator's approve/reject decision on a pending
 request without changing payment or subscription state. Financial execution
-routes remain closed until persisted workflow resume and duplicate-execution
-protection are implemented.
+is now available only through a separate CRM-internal mock-execution credential.
+The agent service does not receive that credential, so customer billing remains
+closed until persisted workflow resume is implemented.
 See [PLAN.md](PLAN.md) for sequencing and [DECISIONS.md](DECISIONS.md) for tradeoffs.
 
 ## Local development
@@ -44,7 +45,7 @@ uv run ruff check .
 uv run pytest -q
 ```
 
-Copy `.env.example` to ignored `.env` and replace the sample password, five
+Copy `.env.example` to ignored `.env` and replace the sample password, six
 service tokens, and customer/admin session secrets with unique, distinct local values.
 Then run `docker compose up
 --build`. The CRM container applies migrations and inserts 37 synthetic
@@ -139,9 +140,7 @@ The CRM checks customer ownership and deterministic eligibility, writes a
 request or `200` for an identical retry. Reusing a key with different data, or
 opening a second action on the same target, returns `409`. Ineligible attempts
 are audited and return `409`; unknown or other-customer resources return `404`.
-These endpoints do not refund a payment or cancel a subscription. The future
-workflow must resume the same conversation and execute exactly once before
-those state changes are available.
+These request endpoints do not refund a payment or cancel a subscription.
 
 `POST /internal/action-requests/{refund|cancellation}/{request_id}/decision`
 accepts `{"decision":"approve"}` or `{"decision":"reject"}` with a short-lived
@@ -153,6 +152,21 @@ during the decision and its audit insert in PostgreSQL. Neither decision
 changes a payment balance or subscription. `admin_identity.issue_admin_session`
 is an internal signing primitive, not a public login route; a trusted admin
 login flow and checkpointed billing workflow are still required.
+
+`POST /internal/customers/{customer_id}/action-requests/{refund|cancellation}/{request_id}/execute`
+requires `Authorization: Bearer <CRM_BILLING_EXECUTE_TOKEN>` and the original
+`conversation_id`. The execute credential is distinct from the read, request,
+and administrator credentials and is supplied only to the CRM service today.
+The CRM returns `404` for a wrong customer or conversation, rejects pending or
+rejected requests, rechecks account and target eligibility, and locks the
+approved request and target before a single transaction updates the local mock
+ledger and writes its execution audit event. A retry of an executed request
+returns the same result without another mutation or audit event. A full refund
+marks the payment and invoice refunded; a partial refund leaves their existing
+charged/paid status and updates the refundable balance. Cancellation is
+immediate in the local mock. No real payment provider is contacted. This
+internal endpoint must not be called until the future graph resumes the same
+thread after administrator approval.
 
 ### Internal logistics reads
 
