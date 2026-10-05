@@ -7,11 +7,15 @@ from dataclasses import asdict
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException
+from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg import Error as PostgresError
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from support_system.contracts import (
+    BillingRequestInput,
+    BillingRequestRead,
     CustomerMessageInput,
     CustomerMessageRead,
     HealthResponse,
@@ -23,8 +27,10 @@ from support_system.contracts import (
 from support_system.crm_models import SupportArticle
 from support_system.customer_identity import CustomerIdentity, require_customer_identity
 from support_system.db import database_url
+from support_system.scoped_tools import BillingTool, LogisticsTool, TechnicalTool
 from support_system.support_knowledge import answer_technical
-from support_system.workflow_graph import run_message
+from support_system.workflow_graph import build_graph, run_message
+from support_system.workflow_nodes import new_state
 
 app = FastAPI(title="Support Agent API", version="0.1.0")
 
@@ -54,8 +60,10 @@ def knowledge_scope(authorization: Annotated[str | None, Header()] = None) -> No
     if not token:
         raise HTTPException(status_code=503, detail="Knowledge base unavailable")
     supplied = authorization.removeprefix("Bearer ") if authorization else ""
-    if not authorization or not authorization.startswith("Bearer ") or not hmac.compare_digest(
-        supplied, token
+    if (
+        not authorization
+        or not authorization.startswith("Bearer ")
+        or not hmac.compare_digest(supplied, token)
     ):
         raise HTTPException(status_code=403, detail="Forbidden")
 
@@ -97,4 +105,61 @@ def customer_message(
         evidence=state.get("evidence", []),
         tracking=state.get("tracking"),
         escalation_reason=state.get("escalation_reason") if escalated else None,
+    )
+
+
+def billing_checkpoint() -> Iterator[PostgresSaver]:
+    try:
+        dsn = database_url().set(drivername="postgresql").render_as_string(hide_password=False)
+        with PostgresSaver.from_conn_string(dsn) as saver:
+            saver.setup()
+            yield saver
+    except (PostgresError, OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="Billing workflow unavailable") from exc
+
+
+@app.post("/v1/support/billing-requests", response_model=BillingRequestRead)
+def request_billing_action(
+    request: BillingRequestInput,
+    identity: Annotated[CustomerIdentity, Depends(require_customer_identity)],
+    saver: Annotated[PostgresSaver, Depends(billing_checkpoint)],
+) -> BillingRequestRead:
+    graph = build_graph(TechnicalTool(), LogisticsTool(), billing=BillingTool(), checkpointer=saver)
+    action = request.model_dump(mode="json")
+    config = {"configurable": {"thread_id": f"{identity.customer_id}:{request.conversation_id}"}}
+    snapshot = graph.get_state(config)
+    if snapshot.values:
+        if snapshot.values.get("billing_action") != action:
+            raise HTTPException(status_code=409, detail="Conversation already used")
+        interrupts = [item for task in snapshot.tasks for item in task.interrupts]
+        if interrupts:
+            pending = interrupts[0].value
+            return BillingRequestRead(
+                status="approval_required",
+                request_id=pending["request_id"],
+                action=pending["action"],
+                answer="Your request is awaiting administrator review.",
+            )
+        state = snapshot.values
+    else:
+        state = new_state(
+            identity, "refund payment" if request.action == "refund" else "cancel subscription"
+        )
+        state["billing_action"] = action
+        result = graph.invoke(state, config=config)
+        if result.get("__interrupt__"):
+            pending = result["__interrupt__"][0].value
+            return BillingRequestRead(
+                status="approval_required",
+                request_id=pending["request_id"],
+                action=pending["action"],
+                answer="Your request is awaiting administrator review.",
+            )
+        state = result
+    if state.get("intent") != "escalation":
+        raise HTTPException(status_code=503, detail="Billing workflow unavailable")
+    return BillingRequestRead(
+        status="escalated",
+        answer=state["answer"],
+        escalation_reason=state.get("escalation_reason"),
     )

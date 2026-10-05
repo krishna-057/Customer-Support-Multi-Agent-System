@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ServiceName(StrEnum):
@@ -166,6 +166,32 @@ class CustomerMessageInput(BaseModel):
 
     message: str = Field(min_length=1, max_length=500)
     order_id: UUID | None = None
+
+
+class BillingRequestInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: UUID
+    action: Literal["refund", "cancellation"]
+    target_id: UUID
+    amount_cents: int | None = Field(default=None, gt=0)
+    reason: str = Field(min_length=3, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_amount(self):
+        if (self.action == "refund") != (self.amount_cents is not None):
+            raise ValueError("Refunds require an amount; cancellations must omit it")
+        return self
+
+
+class BillingRequestRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["approval_required", "escalated"]
+    request_id: UUID | None = None
+    action: Literal["refund", "cancellation"] | None = None
+    answer: str
+    escalation_reason: str | None = None
 
 
 class TechnicalEvidenceRead(BaseModel):

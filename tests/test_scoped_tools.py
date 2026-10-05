@@ -7,7 +7,8 @@ from uuid import uuid4
 import pytest
 
 from support_system import scoped_tools
-from support_system.scoped_tools import LogisticsTool, TechnicalTool, ToolFailure
+from support_system.contracts import BillingRequestInput
+from support_system.scoped_tools import BillingTool, LogisticsTool, TechnicalTool, ToolFailure
 
 
 class FakeResponse:
@@ -141,6 +142,78 @@ def test_missing_credentials_prevent_outbound_calls(monkeypatch):
     with pytest.raises(ToolFailure) as failure:
         LogisticsTool().list_orders(uuid4())
     assert failure.value.code == "configuration"
+
+
+def test_billing_adapter_sends_scoped_pending_request(monkeypatch):
+    customer_id, target_id, conversation_id, request_id = (uuid4() for _ in range(4))
+    monkeypatch.setenv("CRM_BILLING_REQUEST_TOKEN", "request-only-secret")
+    monkeypatch.setenv("CRM_API_URL", "http://crm.test:8000")
+    calls = []
+
+    def fake_open(request, timeout):
+        calls.append((request, timeout))
+        return FakeResponse(
+            {
+                "request_id": str(request_id),
+                "customer_id": str(customer_id),
+                "target_id": str(target_id),
+                "action": "refund",
+                "status": "pending",
+            }
+        )
+
+    monkeypatch.setattr(scoped_tools, "urlopen", fake_open)
+    result = BillingTool().request(
+        customer_id,
+        BillingRequestInput(
+            conversation_id=conversation_id,
+            action="refund",
+            target_id=target_id,
+            amount_cents=1200,
+            reason="Duplicate charge",
+        ),
+    )
+    request, timeout = calls[0]
+    assert result.request_id == request_id and timeout == 3
+    assert request.full_url.endswith(f"/customers/{customer_id}/refund-requests")
+    assert request.get_header("Authorization") == "Bearer request-only-secret"
+    assert request.get_header("Idempotency-key") == f"billing:{conversation_id}"
+    assert json.loads(request.data) == {
+        "payment_id": str(target_id),
+        "amount_cents": 1200,
+        "reason": "Duplicate charge",
+        "conversation_id": str(conversation_id),
+    }
+
+
+def test_billing_adapter_rejects_wrong_owner_and_missing_token(monkeypatch):
+    customer_id, target_id, conversation_id = (uuid4() for _ in range(3))
+    body = BillingRequestInput(
+        conversation_id=conversation_id,
+        action="cancellation",
+        target_id=target_id,
+        reason="No longer needed",
+    )
+    monkeypatch.delenv("CRM_BILLING_REQUEST_TOKEN", raising=False)
+    monkeypatch.setattr(scoped_tools, "urlopen", lambda *_args, **_kwargs: pytest.fail("called"))
+    with pytest.raises(ToolFailure, match="configuration"):
+        BillingTool().request(customer_id, body)
+    monkeypatch.setenv("CRM_BILLING_REQUEST_TOKEN", "request-only-secret")
+    monkeypatch.setattr(
+        scoped_tools,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(
+            {
+                "request_id": str(uuid4()),
+                "customer_id": str(uuid4()),
+                "target_id": str(target_id),
+                "action": "cancellation",
+                "status": "pending",
+            }
+        ),
+    )
+    with pytest.raises(ToolFailure, match="invalid_response"):
+        BillingTool().request(customer_id, body)
 
 
 @pytest.mark.parametrize(

@@ -4,11 +4,19 @@ import re
 from typing import Literal, Protocol, TypedDict
 from uuid import UUID
 
-from support_system.contracts import OrderListRead, TechnicalAnswerRead, TrackingRead
+from langgraph.types import interrupt
+
+from support_system.contracts import (
+    ActionRequestRead,
+    BillingRequestInput,
+    OrderListRead,
+    TechnicalAnswerRead,
+    TrackingRead,
+)
 from support_system.customer_identity import CustomerIdentity
 from support_system.scoped_tools import ToolFailure
 
-Intent = Literal["technical", "fulfillment", "escalation"]
+Intent = Literal["technical", "fulfillment", "billing", "escalation"]
 
 
 class SupportState(TypedDict, total=False):
@@ -21,6 +29,7 @@ class SupportState(TypedDict, total=False):
     tracking: dict | None
     escalation_reason: str | None
     handoff: dict
+    billing_action: dict
 
 
 class TechnicalPort(Protocol):
@@ -31,6 +40,10 @@ class LogisticsPort(Protocol):
     def list_orders(self, customer_id: UUID) -> OrderListRead: ...
 
     def track(self, customer_id: UUID, order_id: UUID) -> TrackingRead: ...
+
+
+class BillingPort(Protocol):
+    def request(self, customer_id: UUID, body: BillingRequestInput) -> ActionRequestRead: ...
 
 
 TECHNICAL_TERMS = frozenset(
@@ -71,7 +84,7 @@ def supervisor(state: SupportState) -> SupportState:
     ]
     if len(categories) > 1:
         return {"intent": "escalation", "escalation_reason": "ambiguous_intent"}
-    if categories == ["billing"]:
+    if categories == ["billing"] and not state.get("billing_action"):
         return {"intent": "escalation", "escalation_reason": "billing_workflow_unavailable"}
     if categories:
         return {"intent": categories[0]}
@@ -132,6 +145,20 @@ def fulfillment_node(state: SupportState, tool: LogisticsPort) -> SupportState:
         return {"intent": "escalation", "escalation_reason": "invalid_order_id"}
     except ToolFailure as exc:
         return {"intent": "escalation", "escalation_reason": f"logistics_{exc.code}"}
+
+
+def billing_node(state: SupportState, tool: BillingPort) -> SupportState:
+    customer_id = _customer(state)
+    if customer_id is None:
+        return {"intent": "escalation", "escalation_reason": "invalid_customer_identity"}
+    try:
+        body = BillingRequestInput.model_validate(state["billing_action"])
+        result = tool.request(customer_id, body)
+    except (KeyError, ValueError, ToolFailure) as exc:
+        reason = f"billing_{exc.code}" if isinstance(exc, ToolFailure) else "invalid_billing_action"
+        return {"intent": "escalation", "escalation_reason": reason}
+    interrupt({"request_id": str(result.request_id), "action": result.action})
+    return {"intent": "escalation", "escalation_reason": "billing_resume_unavailable"}
 
 
 def escalation_node(state: SupportState) -> SupportState:

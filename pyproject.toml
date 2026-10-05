@@ -12,6 +12,7 @@ dependencies = [
   "faker>=37,<39",
   "fastapi>=0.115,<1",
   "langgraph>=1,<2",
+  "langgraph-checkpoint-postgres>=3,<4",
   "pgvector>=0.4,<1",
   "psycopg[binary]>=3.2,<4",
   "sqlalchemy>=2.0,<2.1",

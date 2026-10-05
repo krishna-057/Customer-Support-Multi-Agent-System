@@ -9,7 +9,13 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
-from support_system.contracts import OrderListRead, TechnicalAnswerRead, TrackingRead
+from support_system.contracts import (
+    ActionRequestRead,
+    BillingRequestInput,
+    OrderListRead,
+    TechnicalAnswerRead,
+    TrackingRead,
+)
 
 MAX_RESPONSE_BYTES = 65536
 
@@ -20,22 +26,37 @@ class ToolFailure(Exception):
     status_code: int | None = None
 
 
-def _call(url: str, token: str | None, *, question: str | None = None) -> dict:
+def _call(
+    url: str,
+    token: str | None,
+    *,
+    question: str | None = None,
+    body: dict | None = None,
+    idempotency_key: str | None = None,
+) -> dict:
     if not token:
         raise ToolFailure("configuration")
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     payload = None
-    if question is not None:
+    if question is not None or body is not None:
         headers["Content-Type"] = "application/json"
-        payload = json.dumps({"question": question}).encode("utf-8")
+        payload = json.dumps({"question": question} if question is not None else body).encode(
+            "utf-8"
+        )
+    if idempotency_key is not None:
+        headers["Idempotency-Key"] = idempotency_key
     request = Request(url, data=payload, headers=headers, method="POST" if payload else "GET")
     try:
         with urlopen(request, timeout=3) as response:
             raw = response.read(MAX_RESPONSE_BYTES + 1)
     except HTTPError as exc:
-        code = {403: "forbidden", 404: "not_found", 429: "rate_limited", 504: "timeout"}.get(
-            exc.code, "unavailable"
-        )
+        code = {
+            403: "forbidden",
+            404: "not_found",
+            409: "conflict",
+            429: "rate_limited",
+            504: "timeout",
+        }.get(exc.code, "unavailable")
         raise ToolFailure(code, exc.code) from None
     except (URLError, TimeoutError, OSError):
         raise ToolFailure("unavailable") from None
@@ -92,5 +113,36 @@ class LogisticsTool:
         except ValidationError:
             raise ToolFailure("invalid_response") from None
         if result.order.customer_id != customer_id or result.order.order_id != order_id:
+            raise ToolFailure("invalid_response")
+        return result
+
+
+class BillingTool:
+    def request(self, customer_id: UUID, body: BillingRequestInput) -> ActionRequestRead:
+        base = os.getenv("CRM_API_URL", "http://127.0.0.1:8001")
+        path = "refund-requests" if body.action == "refund" else "cancellation-requests"
+        payload = {
+            "payment_id" if body.action == "refund" else "subscription_id": str(body.target_id),
+            "reason": body.reason,
+            "conversation_id": str(body.conversation_id),
+        }
+        if body.action == "refund":
+            payload["amount_cents"] = body.amount_cents
+        value = _call(
+            f"{base.rstrip('/')}/internal/customers/{customer_id}/{path}",
+            os.getenv("CRM_BILLING_REQUEST_TOKEN"),
+            body=payload,
+            idempotency_key=f"billing:{body.conversation_id}",
+        )
+        try:
+            result = ActionRequestRead.model_validate(value)
+        except ValidationError:
+            raise ToolFailure("invalid_response") from None
+        if (
+            result.customer_id != customer_id
+            or result.target_id != body.target_id
+            or result.action != body.action
+            or result.status != "pending"
+        ):
             raise ToolFailure("invalid_response")
         return result

@@ -24,13 +24,15 @@ logistics order/tracking reads. A 20-article synthetic knowledge base has a
 pgvector cosine index and a guarded, evidence-bearing technical answer endpoint.
 Workflow foundations include signed customer-session verification, narrow
 technical/logistics HTTP adapters, and deterministic supervisor, technical,
-fulfillment, and escalation node functions. A compiled LangGraph now routes
+fulfillment, billing, and escalation node functions. A compiled LangGraph now routes
 those nodes behind a signed-session-only message endpoint.
 The CRM can now persist an administrator's approve/reject decision on a pending
 request without changing payment or subscription state. Financial execution
 is now available only through a separate CRM-internal mock-execution credential.
-The agent service does not receive that credential, so customer billing remains
-closed until persisted workflow resume is implemented.
+The agent can create a customer-scoped pending action and persist a PostgreSQL
+interrupt, but it does not receive the execution credential or expose resume.
+Approval decisions are not yet connected to the graph, so financial execution
+remains closed.
 See [PLAN.md](PLAN.md) for sequencing and [DECISIONS.md](DECISIONS.md) for tradeoffs.
 
 ## Local development
@@ -93,11 +95,11 @@ short-lived token yields the customer ID used to build workflow state. The
 technical and logistics adapters hold only their respective server-side service
 tokens, set a three-second HTTP timeout, validate response contracts and
 customer/order ownership, and return sanitized failure codes. The deterministic
-supervisor escalates ambiguous, billing, explicit-human, and unknown requests.
+supervisor escalates ambiguous, unstructured billing, explicit-human, and unknown requests.
 The technical node requires evidence; the fulfillment node passes only the
 verified customer ID to the logistics service; the escalation node prepares a
-handoff. The graph wires these functions behind an authenticated route;
-conversation persistence and session issuance remain future work.
+handoff. The graph wires these functions behind an authenticated route; only
+structured billing requests have persistent checkpoints. Session issuance remains future work.
 
 ### Customer workflow
 
@@ -110,9 +112,21 @@ and billing, mixed, unknown, or explicit-human requests to escalation. Service
 tokens stay on the backend. The response omits internal handoff context.
 
 No public session issuer or login flow exists yet, so this endpoint is only
-usable with a session issued by a trusted integration. The graph has no
+usable with a session issued by a trusted integration. This message route has no
 checkpointer or conversation history; each message runs independently.
 Escalation is a response, not a persisted ticket. No billing action executes.
+
+`POST /v1/support/billing-requests` requires the same signed customer session
+and a structured body with a UUID `conversation_id`, `action` (`refund` or
+`cancellation`), UUID `target_id`, `reason`, and `amount_cents` only for refunds.
+The agent binds the customer ID from the session, sends a request-only CRM token,
+and derives a stable idempotency key from the conversation ID. If CRM accepts a
+pending request, the billing graph interrupts and returns `approval_required`
+with its request ID. A repeat of the same customer, conversation, and payload
+returns the existing interrupt; a changed payload returns 409. CRM policy can
+deny the request, in which case the workflow escalates without an interrupt.
+PostgreSQL stores the checkpoint, including the action reason, so use synthetic
+or appropriately governed data. No public resume or execution route is enabled.
 
 ### Internal CRM reads
 

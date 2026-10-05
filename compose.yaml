@@ -63,8 +63,10 @@ services:
       TECHNICAL_RETRIEVAL_TOKEN: ${TECHNICAL_RETRIEVAL_TOKEN:?set TECHNICAL_RETRIEVAL_TOKEN in ignored .env}
       LOGISTICS_ORDER_READ_TOKEN: ${LOGISTICS_ORDER_READ_TOKEN:?set LOGISTICS_ORDER_READ_TOKEN in ignored .env}
       CUSTOMER_SESSION_SECRET: ${CUSTOMER_SESSION_SECRET:?set CUSTOMER_SESSION_SECRET in ignored .env}
+      CRM_BILLING_REQUEST_TOKEN: ${CRM_BILLING_REQUEST_TOKEN:?set CRM_BILLING_REQUEST_TOKEN in ignored .env}
       TECHNICAL_API_URL: http://127.0.0.1:8000
       LOGISTICS_API_URL: http://logistics-api:8000
+      CRM_API_URL: http://crm-api:8000
     depends_on:
       postgres:
         condition: service_healthy
