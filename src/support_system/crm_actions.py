@@ -246,7 +246,7 @@ def decide_action_request(
         raise HTTPException(status_code=404, detail="Request not found")
 
     status = "approved" if decision == "approve" else "rejected"
-    if item.status == status:
+    if item.status == status or (item.status == "executed" and decision == "approve"):
         return item, False
     if item.status != "pending":
         raise HTTPException(status_code=409, detail="Request already decided")

@@ -392,6 +392,11 @@ def test_approved_refund_executes_once_and_audits_once(crm):
     assert first_run.status_code == retry.status_code == 200
     assert first_run.json() == retry.json()
     assert first_run.json()["status"] == "executed"
+    approved_replay = client.post(decision, json={"decision": "approve"}, headers=admin_headers())
+    rejected_replay = client.post(decision, json={"decision": "reject"}, headers=admin_headers())
+    assert approved_replay.status_code == 200
+    assert approved_replay.json()["status"] == "executed"
+    assert rejected_replay.status_code == 409
     with Session(engine) as session:
         request = session.get(RefundRequest, request_id)
         payment = session.get(Payment, payments[first])

@@ -4,16 +4,20 @@ import hmac
 import os
 from collections.abc import Iterator
 from dataclasses import asdict
-from typing import Annotated
+from typing import Annotated, Literal
+from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.types import Command
 from psycopg import Error as PostgresError
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from support_system.admin_identity import AdminIdentity, require_admin_identity
 from support_system.contracts import (
+    ActionDecisionInput,
     BillingRequestInput,
     BillingRequestRead,
     CustomerMessageInput,
@@ -27,7 +31,7 @@ from support_system.contracts import (
 from support_system.crm_models import SupportArticle
 from support_system.customer_identity import CustomerIdentity, require_customer_identity
 from support_system.db import database_url
-from support_system.scoped_tools import BillingTool, LogisticsTool, TechnicalTool
+from support_system.scoped_tools import BillingTool, LogisticsTool, TechnicalTool, ToolFailure
 from support_system.support_knowledge import answer_technical
 from support_system.workflow_graph import build_graph, run_message
 from support_system.workflow_nodes import new_state
@@ -156,10 +160,84 @@ def request_billing_action(
                 answer="Your request is awaiting administrator review.",
             )
         state = result
-    if state.get("intent") != "escalation":
+    return _billing_response(state)
+
+
+def _billing_response(state: dict) -> BillingRequestRead:
+    result = state.get("billing_result")
+    if result and result.get("status") in {"executed", "rejected"}:
+        return BillingRequestRead(
+            status=result["status"],
+            request_id=result["request_id"],
+            action=state["billing_action"]["action"],
+            answer=state["answer"],
+        )
+    if state.get("intent") == "escalation":
+        return BillingRequestRead(
+            status="escalated",
+            answer=state["answer"],
+            escalation_reason=state.get("escalation_reason"),
+        )
+    raise HTTPException(status_code=503, detail="Billing workflow unavailable")
+
+
+@app.post(
+    "/v1/admin/customers/{customer_id}/conversations/{conversation_id}/"
+    "actions/{action}/{request_id}/decision",
+    response_model=BillingRequestRead,
+)
+def decide_billing_action(
+    customer_id: UUID,
+    conversation_id: UUID,
+    action: Literal["refund", "cancellation"],
+    request_id: UUID,
+    body: ActionDecisionInput,
+    _admin: Annotated[AdminIdentity, Depends(require_admin_identity)],
+    saver: Annotated[PostgresSaver, Depends(billing_checkpoint)],
+    authorization: Annotated[str, Header()],
+) -> BillingRequestRead:
+    tool = BillingTool()
+    graph = build_graph(TechnicalTool(), LogisticsTool(), billing=tool, checkpointer=saver)
+    config = {"configurable": {"thread_id": f"{customer_id}:{conversation_id}"}}
+    snapshot = graph.get_state(config)
+    values = snapshot.values
+    if not values or values.get("customer_id") != str(customer_id):
+        raise HTTPException(status_code=404, detail="Request not found")
+    try:
+        original = BillingRequestInput.model_validate(values["billing_action"])
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="Request not found") from exc
+    if original.conversation_id != conversation_id or original.action != action:
+        raise HTTPException(status_code=404, detail="Request not found")
+    completed = values.get("billing_result")
+    if completed:
+        if completed.get("request_id") != str(request_id):
+            raise HTTPException(status_code=404, detail="Request not found")
+        expected = "executed" if body.decision == "approve" else "rejected"
+        if completed.get("status") != expected:
+            raise HTTPException(status_code=409, detail="Request already decided")
+        return _billing_response(values)
+    interrupts = [item for task in snapshot.tasks for item in task.interrupts]
+    if len(interrupts) != 1 or interrupts[0].value != {
+        "request_id": str(request_id),
+        "action": action,
+    }:
+        raise HTTPException(status_code=404, detail="Request not found")
+    try:
+        decided = tool.decide(customer_id, original, request_id, body.decision, authorization)
+        expected = "approved" if body.decision == "approve" else "rejected"
+        if decided.status not in (
+            {expected, "executed"} if body.decision == "approve" else {expected}
+        ):
+            raise HTTPException(status_code=409, detail="Request already decided")
+        result = graph.invoke(
+            Command(resume={"decision": body.decision, "request_id": str(request_id)}),
+            config=config,
+        )
+    except ToolFailure as exc:
+        status_code = 409 if exc.code == "conflict" else 503
+        raise HTTPException(status_code=status_code, detail="Billing workflow unavailable") from exc
+    response = _billing_response(result)
+    if response.status not in {"executed", "rejected"}:
         raise HTTPException(status_code=503, detail="Billing workflow unavailable")
-    return BillingRequestRead(
-        status="escalated",
-        answer=state["answer"],
-        escalation_reason=state.get("escalation_reason"),
-    )
+    return response

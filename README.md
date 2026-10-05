@@ -29,10 +29,10 @@ those nodes behind a signed-session-only message endpoint.
 The CRM can now persist an administrator's approve/reject decision on a pending
 request without changing payment or subscription state. Financial execution
 is now available only through a separate CRM-internal mock-execution credential.
-The agent can create a customer-scoped pending action and persist a PostgreSQL
-interrupt, but it does not receive the execution credential or expose resume.
-Approval decisions are not yet connected to the graph, so financial execution
-remains closed.
+The agent creates customer-scoped pending actions and persists PostgreSQL
+interrupts. A signed administrator can approve or reject a paused request and
+resume that exact thread. Approved actions execute only through CRM's guarded,
+idempotent local mock endpoint; no payment provider is contacted.
 See [PLAN.md](PLAN.md) for sequencing and [DECISIONS.md](DECISIONS.md) for tradeoffs.
 
 ## Local development
@@ -49,8 +49,7 @@ uv run pytest -q
 
 Copy `.env.example` to ignored `.env` and replace the sample password, six
 service tokens, and customer/admin session secrets with unique, distinct local values.
-Then run `docker compose up
---build`. The CRM container applies migrations and inserts 37 synthetic
+Then run `docker compose up --build`. The CRM container applies migrations and inserts 37 synthetic
 customers and 20 versioned support articles on startup. PostgreSQL data is
 bind-mounted at `./data/postgres`; the pgvector extension is created when the
 database is first initialized. Only loopback ports are exposed: agent API 8000,
@@ -122,11 +121,24 @@ and a structured body with a UUID `conversation_id`, `action` (`refund` or
 The agent binds the customer ID from the session, sends a request-only CRM token,
 and derives a stable idempotency key from the conversation ID. If CRM accepts a
 pending request, the billing graph interrupts and returns `approval_required`
-with its request ID. A repeat of the same customer, conversation, and payload
-returns the existing interrupt; a changed payload returns 409. CRM policy can
+with its request ID. While pending, a repeat of the same customer, conversation,
+and payload returns the existing interrupt; a changed payload returns 409. CRM policy can
 deny the request, in which case the workflow escalates without an interrupt.
 PostgreSQL stores the checkpoint, including the action reason, so use synthetic
-or appropriately governed data. No public resume or execution route is enabled.
+or appropriately governed data. After a decision, a repeated identical customer
+request returns `executed` or `rejected` with the saved outcome.
+
+`POST /v1/admin/customers/{customer_id}/conversations/{conversation_id}/actions/{action}/{request_id}/decision`
+requires a signed administrator session and `{"decision":"approve"}` or
+`{"decision":"reject"}`. The agent checks that the IDs match a paused checkpoint,
+persists the decision through CRM using the administrator session, and resumes
+only that thread. Rejection never calls execution. Approval calls the CRM mock
+execution endpoint, which checks the approved status, customer and conversation
+IDs, eligibility, and idempotency under row locks. An identical decision retry
+returns the saved result; a conflicting decision returns 409. If execution
+cannot complete, the route fails closed and a retry may resume the checkpoint.
+There is no public admin or customer login issuer yet; trusted integrations
+must issue sessions. Do not expose internal CRM credentials to the browser.
 
 ### Internal CRM reads
 
@@ -165,12 +177,14 @@ audit event, while a conflicting retry returns `409`. The request row is locked
 during the decision and its audit insert in PostgreSQL. Neither decision
 changes a payment balance or subscription. `admin_identity.issue_admin_session`
 is an internal signing primitive, not a public login route; a trusted admin
-login flow and checkpointed billing workflow are still required.
+login flow is still required. An identical approval retry after execution
+returns the executed result without another decision audit event.
 
 `POST /internal/customers/{customer_id}/action-requests/{refund|cancellation}/{request_id}/execute`
 requires `Authorization: Bearer <CRM_BILLING_EXECUTE_TOKEN>` and the original
 `conversation_id`. The execute credential is distinct from the read, request,
-and administrator credentials and is supplied only to the CRM service today.
+and administrator credentials and is supplied to CRM and the server-side agent
+only for the authenticated resume path.
 The CRM returns `404` for a wrong customer or conversation, rejects pending or
 rejected requests, rechecks account and target eligibility, and locks the
 approved request and target before a single transaction updates the local mock
@@ -178,9 +192,9 @@ ledger and writes its execution audit event. A retry of an executed request
 returns the same result without another mutation or audit event. A full refund
 marks the payment and invoice refunded; a partial refund leaves their existing
 charged/paid status and updates the refundable balance. Cancellation is
-immediate in the local mock. No real payment provider is contacted. This
-internal endpoint must not be called until the future graph resumes the same
-thread after administrator approval.
+immediate in the local mock. No real payment provider is contacted. The graph
+calls this endpoint only after an administrator decision has been persisted and
+the same thread resumes.
 
 ### Internal logistics reads
 

@@ -30,6 +30,7 @@ class SupportState(TypedDict, total=False):
     escalation_reason: str | None
     handoff: dict
     billing_action: dict
+    billing_result: dict
 
 
 class TechnicalPort(Protocol):
@@ -44,6 +45,10 @@ class LogisticsPort(Protocol):
 
 class BillingPort(Protocol):
     def request(self, customer_id: UUID, body: BillingRequestInput) -> ActionRequestRead: ...
+
+    def execute(
+        self, customer_id: UUID, body: BillingRequestInput, request_id: UUID
+    ) -> ActionRequestRead: ...
 
 
 TECHNICAL_TERMS = frozenset(
@@ -157,8 +162,27 @@ def billing_node(state: SupportState, tool: BillingPort) -> SupportState:
     except (KeyError, ValueError, ToolFailure) as exc:
         reason = f"billing_{exc.code}" if isinstance(exc, ToolFailure) else "invalid_billing_action"
         return {"intent": "escalation", "escalation_reason": reason}
-    interrupt({"request_id": str(result.request_id), "action": result.action})
-    return {"intent": "escalation", "escalation_reason": "billing_resume_unavailable"}
+    decision = interrupt({"request_id": str(result.request_id), "action": result.action})
+    if (
+        not isinstance(decision, dict)
+        or decision.get("request_id") != str(result.request_id)
+        or decision.get("decision") not in {"approve", "reject"}
+    ):
+        return {"intent": "escalation", "escalation_reason": "invalid_billing_decision"}
+    if decision["decision"] == "reject":
+        if result.status != "rejected":
+            return {"intent": "escalation", "escalation_reason": "unverified_billing_decision"}
+        return {
+            "answer": "Your request was not approved.",
+            "billing_result": {"request_id": str(result.request_id), "status": "rejected"},
+        }
+    if result.status not in {"approved", "executed"}:
+        return {"intent": "escalation", "escalation_reason": "unverified_billing_decision"}
+    executed = tool.execute(customer_id, body, result.request_id)
+    return {
+        "answer": "Your request was completed.",
+        "billing_result": {"request_id": str(executed.request_id), "status": "executed"},
+    }
 
 
 def escalation_node(state: SupportState) -> SupportState:

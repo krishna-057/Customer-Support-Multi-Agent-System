@@ -187,7 +187,7 @@ class BillingRequestInput(BaseModel):
 class BillingRequestRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["approval_required", "escalated"]
+    status: Literal["approval_required", "executed", "rejected", "escalated"]
     request_id: UUID | None = None
     action: Literal["refund", "cancellation"] | None = None
     answer: str

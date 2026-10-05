@@ -216,6 +216,42 @@ def test_billing_adapter_rejects_wrong_owner_and_missing_token(monkeypatch):
         BillingTool().request(customer_id, body)
 
 
+def test_billing_decision_and_execution_use_separate_credentials(monkeypatch):
+    customer_id, target_id, conversation_id, request_id = (uuid4() for _ in range(4))
+    body = BillingRequestInput(
+        conversation_id=conversation_id,
+        action="cancellation",
+        target_id=target_id,
+        reason="No longer needed",
+    )
+    monkeypatch.setenv("CRM_API_URL", "http://crm.test:8000")
+    monkeypatch.setenv("CRM_BILLING_EXECUTE_TOKEN", "execute-only-secret")
+    calls = []
+
+    def fake_open(request, timeout):
+        calls.append(request)
+        return FakeResponse(
+            {
+                "request_id": str(request_id),
+                "customer_id": str(customer_id),
+                "target_id": str(target_id),
+                "action": "cancellation",
+                "status": "approved" if len(calls) == 1 else "executed",
+            }
+        )
+
+    monkeypatch.setattr(scoped_tools, "urlopen", fake_open)
+    tool = BillingTool()
+    decided = tool.decide(customer_id, body, request_id, "approve", "Bearer admin-session")
+    executed = tool.execute(customer_id, body, request_id)
+    assert decided.status == "approved" and executed.status == "executed"
+    assert calls[0].get_header("Authorization") == "Bearer admin-session"
+    assert calls[1].get_header("Authorization") == "Bearer execute-only-secret"
+    assert calls[0].full_url.endswith(f"/cancellation/{request_id}/decision")
+    assert calls[1].full_url.endswith(f"/cancellation/{request_id}/execute")
+    assert json.loads(calls[1].data) == {"conversation_id": str(conversation_id)}
+
+
 @pytest.mark.parametrize(
     ("error", "code"),
     [

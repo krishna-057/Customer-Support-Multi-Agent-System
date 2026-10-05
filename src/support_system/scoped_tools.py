@@ -20,7 +20,7 @@ from support_system.contracts import (
 MAX_RESPONSE_BYTES = 65536
 
 
-@dataclass(frozen=True)
+@dataclass
 class ToolFailure(Exception):
     code: str
     status_code: int | None = None
@@ -142,7 +142,54 @@ class BillingTool:
             result.customer_id != customer_id
             or result.target_id != body.target_id
             or result.action != body.action
-            or result.status != "pending"
+        ):
+            raise ToolFailure("invalid_response")
+        return result
+
+    def decide(
+        self,
+        customer_id: UUID,
+        body: BillingRequestInput,
+        request_id: UUID,
+        decision: str,
+        admin_authorization: str,
+    ) -> ActionRequestRead:
+        base = os.getenv("CRM_API_URL", "http://127.0.0.1:8001")
+        value = _call(
+            f"{base.rstrip('/')}/internal/action-requests/{body.action}/{request_id}/decision",
+            admin_authorization.removeprefix("Bearer "),
+            body={"decision": decision},
+        )
+        return self._validate_action(value, customer_id, body, request_id)
+
+    def execute(
+        self, customer_id: UUID, body: BillingRequestInput, request_id: UUID
+    ) -> ActionRequestRead:
+        base = os.getenv("CRM_API_URL", "http://127.0.0.1:8001")
+        value = _call(
+            f"{base.rstrip('/')}/internal/customers/{customer_id}/action-requests/"
+            f"{body.action}/{request_id}/execute",
+            os.getenv("CRM_BILLING_EXECUTE_TOKEN"),
+            body={"conversation_id": str(body.conversation_id)},
+        )
+        result = self._validate_action(value, customer_id, body, request_id)
+        if result.status != "executed":
+            raise ToolFailure("invalid_response")
+        return result
+
+    @staticmethod
+    def _validate_action(
+        value: dict, customer_id: UUID, body: BillingRequestInput, request_id: UUID
+    ) -> ActionRequestRead:
+        try:
+            result = ActionRequestRead.model_validate(value)
+        except ValidationError:
+            raise ToolFailure("invalid_response") from None
+        if (
+            result.customer_id != customer_id
+            or result.target_id != body.target_id
+            or result.action != body.action
+            or result.request_id != request_id
         ):
             raise ToolFailure("invalid_response")
         return result
