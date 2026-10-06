@@ -120,3 +120,12 @@ Record implementation progress by date:
 - Commit: `eadee56` (Stream customer support progress).
 - Open risks or blockers: Day 8 is partial. There is still no Next.js customer chat, admin approval/escalation views, trusted customer/admin session issuer, persisted escalation ticket, or local full Compose boot. SSE progress is node-level rather than token-level.
 - Next milestone: Build the customer chat against this stream, then the authenticated administrator approval and escalation views; verify full browser flows with local services before claiming Day 8 complete.
+
+## 2026-10-06 - Customer chat interface
+
+- Goal and delivered behavior: Added a responsive Next.js customer chat that consumes the authenticated SSE stream through a fixed same-origin proxy. The browser shows request progress, replies, evidence, escalations, errors, and an optional order ID. A signed customer session is held only in memory and clears on reload; no service credential is in the frontend. CI now installs, tests, typechecks, and builds the frontend.
+- Decisions recorded in `DECISIONS.md`: Keep customer chat sessions separate from service credentials. The proxy limits request size and does not accept a caller-selected upstream URL.
+- Checks run and results: Offline frozen pnpm install passed; frontend stream parser tests passed 2/2; TypeScript no-emit check and optimized Next.js build passed. Playwright desktop 1440x900 and mobile 390x844 screenshots had no horizontal overflow. A loopback browser test with a synthetic signed customer session streamed an explicit-human request through the Next proxy and FastAPI gateway, displaying the escalation response. Proxy checks returned 401 without a session, 413 for an oversized body, and 401 for an invalid session. Backend `pytest -q` passed 87 tests with 11 PostgreSQL tests skipped; Ruff passed. Full local PostgreSQL/Compose and billing browser flows were not run.
+- Commit: `c4467c6` (Add customer support chat).
+- Open risks or blockers: Day 8 remains partial. No trusted customer login issuer, administrator approval UI/queue, persisted escalation ticket/dashboard, or production deployment exists. The loopback test backend used a test-only session secret and was stopped after validation. Local Docker-backed integration remains unavailable.
+- Next milestone: Add an authenticated administrator queue and approval view, persist and display escalation tickets, then validate the billing and escalation browser workflows against the local services.
