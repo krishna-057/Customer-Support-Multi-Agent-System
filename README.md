@@ -35,6 +35,14 @@ resume that exact thread. Approved actions execute only through CRM's guarded,
 idempotent local mock endpoint; no payment provider is contacted.
 See [PLAN.md](PLAN.md) for sequencing and [DECISIONS.md](DECISIONS.md) for tradeoffs.
 
+The `web/` Next.js app is the customer chat interface. It consumes the SSE
+gateway through a fixed same-origin route. No customer or administrator login
+issuer exists yet: for local use, supply a valid short-lived customer session
+from a trusted integration. The browser keeps it only in memory, and the proxy
+forwards it only to the configured agent API. No CRM or execution credential is
+exposed to the frontend. The admin approval queue and escalation dashboard are
+not implemented yet.
+
 ## Local development
 
 Use Python 3.12, uv, and Docker Compose. Keep uv's cache and local data in this
@@ -46,6 +54,13 @@ uv sync --extra dev --frozen
 uv run ruff check .
 uv run pytest -q
 ```
+
+For the customer chat, use Node.js 24 and pnpm 11. From `web/`, run
+`pnpm install --frozen-lockfile` and `pnpm dev`; open
+`http://127.0.0.1:3000`. The Next.js server forwards requests to
+`AGENT_API_URL` (default `http://127.0.0.1:8000`). The agent API and its
+dependencies must be running for support answers. The customer session is not
+stored in browser storage or committed to the repository.
 
 Copy `.env.example` to ignored `.env` and replace the sample password, six
 service tokens, and customer/admin session secrets with unique, distinct local values.
