@@ -111,3 +111,12 @@ Record implementation progress by date:
 - Commit: `59ed83139c83a5b777f102d9f0244cde8a27e6f8` (Resume approved billing actions), pushed directly to `origin/main` and remote SHA verified.
 - Open risks or blockers: The local mock billing approval/resume gate passes, but no real payment provider or trusted public customer/admin login exists. There is no admin queue/UI, customer chat UI, SSE progress, rate limiting, or checkpoint retention policy yet. Concurrent graph resumes are not separately load-tested; CRM's concurrent execution path is covered. The original K: cache/venv storage issue and unavailable local Docker engine remain unresolved.
 - Next milestone: Build the minimal Next.js customer chat and admin approval view with SSE progress, then test a complete browser workflow against the local services without exposing service credentials.
+
+## 2026-10-06 - Customer message progress stream
+
+- Goal and delivered behavior: Added a signed-customer-session SSE endpoint for the existing stateless message graph. It emits node-level routing, tool, retrieval, escalation, and final response events. The final payload matches the REST response shape; an unexpected failure emits only a generic error. No customer ID, handoff state, or service credential is sent to the client.
+- Decisions recorded in `DECISIONS.md`: Stream customer-visible graph progress, leaving billing decisions on authenticated REST routes and avoiding false token-level streaming claims.
+- Checks run and results: A fresh Python 3.12 virtualenv and uv cache under ignored K: `.tmp` passed `pytest -q` with 87 passed and 11 PostgreSQL tests skipped, `ruff check .`, changed-file `ruff format --check`, and `git diff --cached --check`. The local Docker/PostgreSQL integration gate and full browser workflow were not run. The previous D: virtualenv pointed to a missing Windows Python interpreter; the replacement K: environment passed these checks.
+- Commit: `eadee56` (Stream customer support progress).
+- Open risks or blockers: Day 8 is partial. There is still no Next.js customer chat, admin approval/escalation views, trusted customer/admin session issuer, persisted escalation ticket, or local full Compose boot. SSE progress is node-level rather than token-level.
+- Next milestone: Build the customer chat against this stream, then the authenticated administrator approval and escalation views; verify full browser flows with local services before claiming Day 8 complete.
