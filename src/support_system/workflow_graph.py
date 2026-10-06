@@ -1,5 +1,6 @@
 """Compile scoped support workflows; billing pauses before administrator review."""
 
+from collections.abc import Iterator
 from uuid import UUID
 
 from langgraph.graph import END, START, StateGraph
@@ -74,3 +75,16 @@ def run_message(
 ) -> SupportState:
     graph = build_graph(technical or TechnicalTool(), logistics or LogisticsTool())
     return graph.invoke(new_state(identity, message, order_id=order_id))
+
+
+def stream_message(
+    identity: CustomerIdentity,
+    message: str,
+    *,
+    order_id: UUID | None = None,
+    technical: TechnicalPort | None = None,
+    logistics: LogisticsPort | None = None,
+) -> Iterator[tuple[str, SupportState]]:
+    graph = build_graph(technical or TechnicalTool(), logistics or LogisticsTool())
+    for update in graph.stream(new_state(identity, message, order_id=order_id)):
+        yield from update.items()

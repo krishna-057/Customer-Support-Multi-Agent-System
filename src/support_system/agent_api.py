@@ -1,6 +1,7 @@
 """Agent API shell and guarded technical evidence endpoint."""
 
 import hmac
+import json
 import os
 from collections.abc import Iterator
 from dataclasses import asdict
@@ -8,6 +9,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import StreamingResponse
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import Command
 from psycopg import Error as PostgresError
@@ -33,7 +35,7 @@ from support_system.customer_identity import CustomerIdentity, require_customer_
 from support_system.db import database_url
 from support_system.scoped_tools import BillingTool, LogisticsTool, TechnicalTool, ToolFailure
 from support_system.support_knowledge import answer_technical
-from support_system.workflow_graph import build_graph, run_message
+from support_system.workflow_graph import build_graph, run_message, stream_message
 from support_system.workflow_nodes import new_state
 
 app = FastAPI(title="Support Agent API", version="0.1.0")
@@ -101,6 +103,10 @@ def customer_message(
     identity: Annotated[CustomerIdentity, Depends(require_customer_identity)],
 ) -> CustomerMessageRead:
     state = run_message(identity, request.message, order_id=request.order_id)
+    return _customer_response(state)
+
+
+def _customer_response(state: dict) -> CustomerMessageRead:
     escalated = state.get("intent") == "escalation"
     return CustomerMessageRead(
         status="escalated" if escalated else "answered",
@@ -109,6 +115,50 @@ def customer_message(
         evidence=state.get("evidence", []),
         tracking=state.get("tracking"),
         escalation_reason=state.get("escalation_reason") if escalated else None,
+    )
+
+
+def _event(name: str, data: dict) -> str:
+    return f"event: {name}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
+
+
+@app.post("/v1/support/messages/stream")
+def customer_message_stream(
+    request: CustomerMessageInput,
+    identity: Annotated[CustomerIdentity, Depends(require_customer_identity)],
+) -> StreamingResponse:
+    def events() -> Iterator[str]:
+        state: dict = {}
+        try:
+            for node, update in stream_message(
+                identity, request.message, order_id=request.order_id
+            ):
+                state.update(update)
+                if node == "supervisor":
+                    yield _event("routing", {"intent": update["intent"]})
+                    if update["intent"] in {"technical", "fulfillment"}:
+                        yield _event("tool_started", {"tool": update["intent"]})
+                elif node in {"technical", "fulfillment"}:
+                    if update.get("evidence"):
+                        yield _event("retrieval", {"evidence": update["evidence"]})
+                    yield _event(
+                        "tool_finished",
+                        {
+                            "tool": node,
+                            "status": "answered" if update.get("answer") else "escalated",
+                        },
+                    )
+                elif node == "escalation":
+                    yield _event("escalated", {"reason": state.get("escalation_reason")})
+            yield _event("completed", _customer_response(state).model_dump(mode="json"))
+        # Headers are already sent; terminate the stream without exposing backend details.
+        except Exception:  # noqa: BLE001
+            yield _event("error", {"message": "Support response unavailable"})
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
 
 

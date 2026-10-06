@@ -115,6 +115,17 @@ usable with a session issued by a trusted integration. This message route has no
 checkpointer or conversation history; each message runs independently.
 Escalation is a response, not a persisted ticket. No billing action executes.
 
+`POST /v1/support/messages/stream` accepts the same body and signed customer
+session, returning `text/event-stream` for clients using a streaming `fetch`
+request. Events have an `event:` name and JSON `data:` payload. The graph emits
+`routing`; technical or fulfillment branches emit `tool_started` and
+`tool_finished`; grounded technical results also emit `retrieval` with evidence.
+Escalations emit `escalated` with a reason. Every successful stream ends with
+`completed`, containing the same typed response as the non-streaming route.
+An unexpected backend failure ends with a sanitized `error` event instead.
+These are node-level events, not token-by-token text. The stream is not cached
+and never includes customer IDs, raw handoff state, or service credentials.
+
 `POST /v1/support/billing-requests` requires the same signed customer session
 and a structured body with a UUID `conversation_id`, `action` (`refund` or
 `cancellation`), UUID `target_id`, `reason`, and `amount_cents` only for refunds.
