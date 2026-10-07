@@ -183,6 +183,39 @@ def test_refund_request_replay_conflict_and_no_execution(crm):
         assert (payment.refunded_cents, payment.status) == (500, "charged")
 
 
+def test_admin_review_queue_is_scoped_and_paginated(crm):
+    client, _, first, second, payments, subscriptions = crm
+    first_request = client.post(
+        f"/internal/customers/{first}/refund-requests",
+        json=refund_body(payments[first]),
+        headers=headers("review-refund-1"),
+    )
+    second_request = client.post(
+        f"/internal/customers/{second}/cancellation-requests",
+        json=cancellation_body(subscriptions[second]),
+        headers=headers("review-cancel-1"),
+    )
+    assert first_request.status_code == second_request.status_code == 201
+    url = "/internal/action-requests/review"
+    assert client.get(url).status_code == 401
+    assert client.get(url, headers={"Authorization": "Bearer request-secret"}).status_code == 401
+    assert client.get(f"{url}?limit=0", headers=admin_headers()).status_code == 422
+    page = client.get(f"{url}?limit=1", headers=admin_headers())
+    assert page.status_code == 200
+    assert page.headers["cache-control"] == "no-store"
+    assert len(page.json()["items"]) == 1
+    assert page.json()["has_more"] is True
+    second_page = client.get(f"{url}?limit=1&offset=1", headers=admin_headers())
+    assert second_page.status_code == 200
+    assert second_page.json()["has_more"] is False
+    ids = {page.json()["items"][0]["request_id"], second_page.json()["items"][0]["request_id"]}
+    assert ids == {first_request.json()["request_id"], second_request.json()["request_id"]}
+    assert {page.json()["items"][0]["action"], second_page.json()["items"][0]["action"]} == {
+        "refund",
+        "cancellation",
+    }
+
+
 def test_refund_policy_denial_is_audited(crm):
     client, engine, first, second, payments, _ = crm
     url = f"/internal/customers/{first}/refund-requests"

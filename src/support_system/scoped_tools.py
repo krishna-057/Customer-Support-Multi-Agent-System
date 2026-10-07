@@ -13,6 +13,7 @@ from support_system.contracts import (
     ActionRequestRead,
     BillingRequestInput,
     OrderListRead,
+    ReviewQueueRead,
     TechnicalAnswerRead,
     TrackingRead,
 )
@@ -118,6 +119,19 @@ class LogisticsTool:
 
 
 class BillingTool:
+    def list_review_actions(
+        self, admin_authorization: str, *, limit: int = 50, offset: int = 0
+    ) -> ReviewQueueRead:
+        base = os.getenv("CRM_API_URL", "http://127.0.0.1:8001")
+        value = _call(
+            f"{base.rstrip('/')}/internal/action-requests/review?limit={limit}&offset={offset}",
+            admin_authorization.removeprefix("Bearer "),
+        )
+        try:
+            return ReviewQueueRead.model_validate(value)
+        except ValidationError:
+            raise ToolFailure("invalid_response") from None
+
     def request(self, customer_id: UUID, body: BillingRequestInput) -> ActionRequestRead:
         base = os.getenv("CRM_API_URL", "http://127.0.0.1:8001")
         path = "refund-requests" if body.action == "refund" else "cancellation-requests"

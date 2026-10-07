@@ -8,7 +8,7 @@ from dataclasses import asdict
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import Command
@@ -26,6 +26,7 @@ from support_system.contracts import (
     CustomerMessageRead,
     HealthResponse,
     HealthStatus,
+    ReviewQueueRead,
     ServiceName,
     TechnicalAnswerRead,
     TechnicalQuestion,
@@ -229,6 +230,45 @@ def _billing_response(state: dict) -> BillingRequestRead:
             escalation_reason=state.get("escalation_reason"),
         )
     raise HTTPException(status_code=503, detail="Billing workflow unavailable")
+
+
+@app.get("/v1/admin/actions", response_model=ReviewQueueRead)
+def review_billing_actions(
+    response: Response,
+    _admin: Annotated[AdminIdentity, Depends(require_admin_identity)],
+    saver: Annotated[PostgresSaver, Depends(billing_checkpoint)],
+    authorization: Annotated[str, Header()],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0, le=1000)] = 0,
+) -> ReviewQueueRead:
+    try:
+        queue = BillingTool().list_review_actions(authorization, limit=limit, offset=offset)
+    except ToolFailure as exc:
+        raise HTTPException(status_code=503, detail="Review queue unavailable") from exc
+    graph = build_graph(TechnicalTool(), LogisticsTool(), billing=BillingTool(), checkpointer=saver)
+    ready = []
+    for item in queue.items:
+        try:
+            conversation_id = UUID(item.conversation_id)
+            config = {"configurable": {"thread_id": f"{item.customer_id}:{conversation_id}"}}
+            snapshot = graph.get_state(config)
+            action = BillingRequestInput.model_validate(snapshot.values["billing_action"])
+        except (ValueError, KeyError):
+            continue
+        interrupts = [part for task in snapshot.tasks for part in task.interrupts]
+        if (
+            snapshot.values.get("customer_id") == str(item.customer_id)
+            and action.conversation_id == conversation_id
+            and action.action == item.action
+            and action.target_id == item.target_id
+            and action.amount_cents == item.amount_cents
+            and action.reason == item.reason
+            and len(interrupts) == 1
+            and interrupts[0].value == {"request_id": str(item.request_id), "action": item.action}
+        ):
+            ready.append(item)
+    response.headers["Cache-Control"] = "no-store"
+    return ReviewQueueRead(items=ready, offset=queue.offset, has_more=queue.has_more)
 
 
 @app.post(

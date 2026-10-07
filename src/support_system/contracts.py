@@ -194,6 +194,28 @@ class BillingRequestRead(BaseModel):
     escalation_reason: str | None = None
 
 
+class ReviewActionRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: UUID
+    customer_id: UUID
+    conversation_id: str
+    action: Literal["refund", "cancellation"]
+    target_id: UUID
+    amount_cents: int | None
+    reason: str
+    status: Literal["pending", "approved"]
+    created_at: datetime
+
+
+class ReviewQueueRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ReviewActionRead]
+    offset: int
+    has_more: bool
+
+
 class TechnicalEvidenceRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

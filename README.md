@@ -40,8 +40,8 @@ gateway through a fixed same-origin route. No customer or administrator login
 issuer exists yet: for local use, supply a valid short-lived customer session
 from a trusted integration. The browser keeps it only in memory, and the proxy
 forwards it only to the configured agent API. No CRM or execution credential is
-exposed to the frontend. The admin approval queue and escalation dashboard are
-not implemented yet.
+exposed to the frontend. The admin approval queue is available at `/admin`;
+the escalation dashboard is not implemented yet.
 
 ## Local development
 
@@ -61,6 +61,12 @@ For the customer chat, use Node.js 24 and pnpm 11. From `web/`, run
 `AGENT_API_URL` (default `http://127.0.0.1:8000`). The agent API and its
 dependencies must be running for support answers. The customer session is not
 stored in browser storage or committed to the repository.
+The admin review page at `/admin` similarly needs a short-lived signed
+administrator session from a trusted issuer. It shows pending or approved CRM
+actions only when the agent finds a matching paused graph checkpoint. Approve
+and reject send the decision to the existing authenticated resume endpoint;
+approval executes only the guarded local mock action. Sessions and review
+details are not cached by the browser proxies. There is no public login flow.
 
 Copy `.env.example` to ignored `.env` and replace the sample password, six
 service tokens, and customer/admin session secrets with unique, distinct local values.
@@ -165,6 +171,13 @@ returns the saved result; a conflicting decision returns 409. If execution
 cannot complete, the route fails closed and a retry may resume the checkpoint.
 There is no public admin or customer login issuer yet; trusted integrations
 must issue sessions. Do not expose internal CRM credentials to the browser.
+
+`GET /v1/admin/actions?offset=0&limit=50` requires the same administrator
+session. The CRM supplies bounded pending/approved action details; the agent
+returns only requests whose customer, conversation, payload, request ID, and
+action match a paused graph checkpoint. The response is not cached and carries
+`items`, `offset`, and `has_more`. CRM requests without a matching checkpoint
+are not reviewable here. The underlying CRM review route is also admin-only.
 
 ### Internal CRM reads
 

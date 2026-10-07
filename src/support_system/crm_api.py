@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 import psycopg
-from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -23,6 +23,7 @@ from support_system.contracts import (
     HealthResponse,
     HealthStatus,
     RefundRequestInput,
+    ReviewQueueRead,
     ServiceName,
 )
 from support_system.crm_actions import (
@@ -31,10 +32,53 @@ from support_system.crm_actions import (
     decide_action_request,
     execute_action_request,
 )
-from support_system.crm_models import Customer, Invoice, Payment, Subscription
+from support_system.crm_models import (
+    CancellationRequest,
+    Customer,
+    Invoice,
+    Payment,
+    RefundRequest,
+    Subscription,
+)
 from support_system.db import get_session
 
 app = FastAPI(title="Support CRM API", version="0.1.0")
+
+
+@app.get("/internal/action-requests/review", response_model=ReviewQueueRead)
+def review_action_requests(
+    response: Response,
+    session: Annotated[Session, Depends(get_session)],
+    _admin: Annotated[AdminIdentity, Depends(require_admin_identity)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0, le=1000)] = 0,
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    rows = []
+    for action, model in (("refund", RefundRequest), ("cancellation", CancellationRequest)):
+        candidates = session.scalars(
+            select(model)
+            .where(model.status.in_(("pending", "approved")))
+            .order_by(model.created_at, model.id)
+            .limit(offset + limit + 1)
+        ).all()
+        for item in candidates:
+            rows.append(
+                {
+                    "request_id": item.id,
+                    "customer_id": item.customer_id,
+                    "conversation_id": item.conversation_id,
+                    "action": action,
+                    "target_id": item.payment_id if action == "refund" else item.subscription_id,
+                    "amount_cents": item.amount_cents if action == "refund" else None,
+                    "reason": item.reason,
+                    "status": item.status,
+                    "created_at": item.created_at,
+                }
+            )
+    rows.sort(key=lambda item: (item["created_at"], item["action"], item["request_id"]))
+    page = rows[offset : offset + limit]
+    return {"items": page, "offset": offset, "has_more": len(rows) > offset + limit}
 
 
 def require_scope(scope: str, authorization: str | None) -> None:

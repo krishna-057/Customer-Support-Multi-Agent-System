@@ -8,6 +8,7 @@ import {
   KeyRound,
   MessageSquareText,
   Plus,
+  Shield,
   ShieldCheck,
   X,
 } from "lucide-react";
@@ -144,7 +145,7 @@ export default function Home() {
       <main className="main">
         <header className="topbar">
           <div className="topbar-title"><span className="mobile-brand"><Headset size={17} /></span>Customer chat</div>
-          <button className="icon-button" type="button" onClick={clearThread} aria-label="New conversation" title="New conversation"><Plus size={19} /></button>
+          <div className="top-actions"><a className="icon-button" href="/admin" aria-label="Admin review" title="Admin review"><Shield size={18} /></a><button className="icon-button" type="button" onClick={clearThread} aria-label="New conversation" title="New conversation"><Plus size={19} /></button></div>
         </header>
 
         <div className="conversation">

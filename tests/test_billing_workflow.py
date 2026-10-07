@@ -1,6 +1,7 @@
 """Billing requests pause on a customer-bound graph thread without execution."""
 
 import os
+from datetime import UTC, datetime
 from urllib.error import HTTPError
 from uuid import UUID, uuid4
 
@@ -14,7 +15,12 @@ from sqlalchemy.orm import Session
 
 from support_system import agent_api, crm_api, scoped_tools
 from support_system.admin_identity import issue_admin_session
-from support_system.contracts import ActionRequestRead, BillingRequestInput
+from support_system.contracts import (
+    ActionRequestRead,
+    BillingRequestInput,
+    ReviewActionRead,
+    ReviewQueueRead,
+)
 from support_system.crm_models import AuditLog, Payment, RefundRequest
 from support_system.customer_identity import CustomerIdentity, issue_session
 from support_system.db import database_url
@@ -227,6 +233,65 @@ def test_admin_decision_resumes_only_matching_thread(monkeypatch, decision, fina
         agent_api.app.dependency_overrides.clear()
 
 
+def test_admin_queue_shows_only_matching_paused_requests(monkeypatch):
+    monkeypatch.setenv("CUSTOMER_SESSION_SECRET", SECRET)
+    monkeypatch.setenv("ADMIN_SESSION_SECRET", SECRET)
+    saver = InMemorySaver()
+    billing = BillingStub()
+    monkeypatch.setattr(agent_api, "BillingTool", lambda: billing)
+    agent_api.app.dependency_overrides[agent_api.billing_checkpoint] = lambda: saver
+    try:
+        customer_id = uuid4()
+        request = _request().model_dump(mode="json")
+        admin_header = {"Authorization": f"Bearer {issue_admin_session(uuid4(), SECRET)}"}
+        with TestClient(agent_api.app) as client:
+            created = client.post(
+                "/v1/support/billing-requests",
+                json=request,
+                headers={"Authorization": f"Bearer {issue_session(customer_id, SECRET)}"},
+            )
+            assert created.status_code == 200
+            item = ReviewActionRead(
+                request_id=created.json()["request_id"],
+                customer_id=customer_id,
+                conversation_id=request["conversation_id"],
+                action="refund",
+                target_id=request["target_id"],
+                amount_cents=request["amount_cents"],
+                reason=request["reason"],
+                status="pending",
+                created_at=datetime.now(UTC),
+            )
+            orphan = item.model_copy(update={"request_id": uuid4()})
+            billing.list_review_actions = lambda authorization, **kwargs: ReviewQueueRead(
+                items=[item, orphan], offset=0, has_more=False
+            )
+            assert client.get("/v1/admin/actions").status_code == 401
+            assert (
+                client.get(
+                    "/v1/admin/actions",
+                    headers={"Authorization": f"Bearer {issue_session(customer_id, SECRET)}"},
+                ).status_code
+                == 401
+            )
+            queued = client.get("/v1/admin/actions", headers=admin_header)
+            assert queued.status_code == 200
+            assert queued.headers["cache-control"] == "no-store"
+            assert len(queued.json()["items"]) == 1
+            assert queued.json()["items"][0]["request_id"] == created.json()["request_id"]
+            path = (
+                f"/v1/admin/customers/{customer_id}/conversations/"
+                f"{request['conversation_id']}/actions/refund/{created.json()['request_id']}/decision"
+            )
+            assert (
+                client.post(path, json={"decision": "reject"}, headers=admin_header).status_code
+                == 200
+            )
+            assert client.get("/v1/admin/actions", headers=admin_header).json()["items"] == []
+    finally:
+        agent_api.app.dependency_overrides.clear()
+
+
 def test_approved_execution_failure_keeps_thread_retryable(monkeypatch):
     monkeypatch.setenv("CUSTOMER_SESSION_SECRET", SECRET)
     monkeypatch.setenv("ADMIN_SESSION_SECRET", SECRET)
@@ -363,6 +428,9 @@ def test_postgres_agent_crm_approval_executes_mock_refund_once(monkeypatch):
             assert created.status_code == 200
             assert created.json()["status"] == "approval_required"
             request_id = created.json()["request_id"]
+            queued = agent_client.get("/v1/admin/actions", headers=admin_header)
+            assert queued.status_code == 200
+            assert any(item["request_id"] == request_id for item in queued.json()["items"])
             path = (
                 f"/v1/admin/customers/{customer_id}/conversations/{conversation_id}/"
                 f"actions/refund/{request_id}/decision"
@@ -372,6 +440,9 @@ def test_postgres_agent_crm_approval_executes_mock_refund_once(monkeypatch):
             assert decided.status_code == replay.status_code == 200
             assert decided.json() == replay.json()
             assert decided.json()["status"] == "executed"
+            after = agent_client.get("/v1/admin/actions", headers=admin_header)
+            assert after.status_code == 200
+            assert all(item["request_id"] != request_id for item in after.json()["items"])
     engine = create_engine(database_url())
     try:
         with Session(engine) as session:
