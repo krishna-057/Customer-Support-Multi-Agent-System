@@ -44,10 +44,13 @@ def test_migrated_schema_and_repeatable_seed():
             "audit_logs",
             "support_articles",
         } <= set(inspect(engine).get_table_names())
+        assert "uq_support_ticket_conversation" in {
+            item["name"] for item in inspect(engine).get_unique_constraints("support_tickets")
+        }
         with Session(engine) as session:
             assert (
                 session.scalar(text("SELECT version_num FROM alembic_version"))
-                == "003_support_articles"
+                == "004_ticket_conversation"
             )
             assert session.scalar(select(func.count()).select_from(Customer)) == 37
             assert session.scalar(select(func.count()).select_from(Subscription)) == 37
