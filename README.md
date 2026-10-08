@@ -35,6 +35,10 @@ resume that exact thread. Approved actions execute only through CRM's guarded,
 idempotent local mock endpoint; no payment provider is contacted.
 See [PLAN.md](PLAN.md) for sequencing and [DECISIONS.md](DECISIONS.md) for tradeoffs.
 
+A [100-case single-turn evaluation](evals/RESULTS.md) now exercises the graph
+with deterministic scoped-tool fixtures. It is not a multi-turn or live-service
+evaluation, and the planned trace and rate-limit gates remain open.
+
 The `web/` Next.js app is the customer chat interface. It consumes the SSE
 gateway through a fixed same-origin route. No customer or administrator login
 issuer exists yet: for local use, supply a valid short-lived customer session

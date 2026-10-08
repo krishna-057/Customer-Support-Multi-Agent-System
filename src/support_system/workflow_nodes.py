@@ -54,7 +54,9 @@ class BillingPort(Protocol):
 TECHNICAL_TERMS = frozenset(
     {"404", "app", "bug", "error", "login", "password", "reset", "setup", "troubleshoot"}
 )
-FULFILLMENT_TERMS = frozenset({"delivery", "eta", "order", "parcel", "shipment", "tracking"})
+FULFILLMENT_TERMS = frozenset(
+    {"delivery", "eta", "order", "orders", "parcel", "shipment", "tracking"}
+)
 BILLING_TERMS = frozenset(
     {"billing", "cancel", "charge", "charged", "invoice", "payment", "refund", "subscription"}
 )
