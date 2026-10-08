@@ -166,6 +166,34 @@ class CustomerMessageInput(BaseModel):
 
     message: str = Field(min_length=1, max_length=500)
     order_id: UUID | None = None
+    conversation_id: UUID | None = None
+
+
+class TicketCreateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: UUID
+    reason: str = Field(pattern=r"^[a-z][a-z0-9_]{2,79}$")
+
+
+class TicketRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ticket_id: UUID
+    customer_id: UUID
+    conversation_id: UUID
+    summary: str
+    priority: Literal["normal", "high"]
+    status: Literal["open"]
+    created_at: datetime
+
+
+class TicketQueueRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[TicketRead]
+    offset: int
+    has_more: bool
 
 
 class BillingRequestInput(BaseModel):
@@ -235,6 +263,7 @@ class CustomerMessageRead(BaseModel):
     evidence: list[TechnicalEvidenceRead] = Field(default_factory=list)
     tracking: OrderListRead | TrackingRead | None = None
     escalation_reason: str | None = None
+    ticket_id: UUID | None = None
 
 
 class TechnicalAnswerRead(BaseModel):

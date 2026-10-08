@@ -15,6 +15,8 @@ from support_system.contracts import (
     OrderListRead,
     ReviewQueueRead,
     TechnicalAnswerRead,
+    TicketQueueRead,
+    TicketRead,
     TrackingRead,
 )
 
@@ -116,6 +118,34 @@ class LogisticsTool:
         if result.order.customer_id != customer_id or result.order.order_id != order_id:
             raise ToolFailure("invalid_response")
         return result
+
+
+class EscalationTool:
+    def create(self, customer_id: UUID, conversation_id: UUID, reason: str) -> TicketRead:
+        base = os.getenv("CRM_API_URL", "http://127.0.0.1:8001")
+        value = _call(
+            f"{base.rstrip('/')}/internal/customers/{customer_id}/tickets",
+            os.getenv("CRM_ESCALATION_WRITE_TOKEN"),
+            body={"conversation_id": str(conversation_id), "reason": reason},
+        )
+        try:
+            result = TicketRead.model_validate(value)
+        except ValidationError:
+            raise ToolFailure("invalid_response") from None
+        if result.customer_id != customer_id or result.conversation_id != conversation_id:
+            raise ToolFailure("invalid_response")
+        return result
+
+    def list_open(self, admin_authorization: str, *, offset: int = 0) -> TicketQueueRead:
+        base = os.getenv("CRM_API_URL", "http://127.0.0.1:8001")
+        value = _call(
+            f"{base.rstrip('/')}/internal/tickets?limit=50&offset={offset}",
+            admin_authorization.removeprefix("Bearer "),
+        )
+        try:
+            return TicketQueueRead.model_validate(value)
+        except ValidationError:
+            raise ToolFailure("invalid_response") from None
 
 
 class BillingTool:

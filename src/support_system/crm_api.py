@@ -9,7 +9,7 @@ import psycopg
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from support_system.admin_identity import AdminIdentity, require_admin_identity
@@ -25,6 +25,9 @@ from support_system.contracts import (
     RefundRequestInput,
     ReviewQueueRead,
     ServiceName,
+    TicketCreateInput,
+    TicketQueueRead,
+    TicketRead,
 )
 from support_system.crm_actions import (
     create_cancellation_request,
@@ -39,10 +42,98 @@ from support_system.crm_models import (
     Payment,
     RefundRequest,
     Subscription,
+    SupportTicket,
 )
 from support_system.db import get_session
 
 app = FastAPI(title="Support CRM API", version="0.1.0")
+
+
+def escalation_scope(authorization: Annotated[str | None, Header()] = None) -> None:
+    require_scope("escalation", authorization)
+
+
+def _ticket_read(item: SupportTicket) -> TicketRead:
+    return TicketRead(
+        ticket_id=item.id,
+        customer_id=item.customer_id,
+        conversation_id=item.conversation_id,
+        summary=item.summary,
+        priority=item.priority,
+        status=item.status,
+        created_at=item.created_at,
+    )
+
+
+@app.post("/internal/customers/{customer_id}/tickets", response_model=TicketRead, status_code=201)
+def create_ticket(
+    customer_id: UUID,
+    body: TicketCreateInput,
+    response: Response,
+    session: Annotated[Session, Depends(get_session)],
+    _scope: Annotated[None, Depends(escalation_scope)],
+) -> TicketRead:
+    response.headers["Cache-Control"] = "no-store"
+    key = str(customer_id)
+    if session.get(Customer, key) is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    existing = session.scalar(
+        select(SupportTicket).where(
+            SupportTicket.customer_id == key,
+            SupportTicket.conversation_id == str(body.conversation_id),
+        )
+    )
+    if existing:
+        if existing.summary != body.reason:
+            raise HTTPException(status_code=409, detail="Conversation already escalated")
+        response.status_code = 200
+        return _ticket_read(existing)
+    item = SupportTicket(
+        customer_id=key,
+        conversation_id=str(body.conversation_id),
+        summary=body.reason,
+        priority="high" if body.reason.endswith(("unavailable", "timeout")) else "normal",
+        status="open",
+    )
+    session.add(item)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        existing = session.scalar(
+            select(SupportTicket).where(
+                SupportTicket.customer_id == key,
+                SupportTicket.conversation_id == str(body.conversation_id),
+            )
+        )
+        if existing and existing.summary == body.reason:
+            response.status_code = 200
+            return _ticket_read(existing)
+        raise HTTPException(status_code=409, detail="Conversation already escalated") from None
+    return _ticket_read(item)
+
+
+@app.get("/internal/tickets", response_model=TicketQueueRead)
+def review_tickets(
+    response: Response,
+    session: Annotated[Session, Depends(get_session)],
+    _admin: Annotated[AdminIdentity, Depends(require_admin_identity)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0, le=1000)] = 0,
+) -> TicketQueueRead:
+    rows = session.scalars(
+        select(SupportTicket)
+        .where(SupportTicket.status == "open")
+        .order_by(SupportTicket.created_at, SupportTicket.id)
+        .offset(offset)
+        .limit(limit + 1)
+    ).all()
+    response.headers["Cache-Control"] = "no-store"
+    return TicketQueueRead(
+        items=[_ticket_read(item) for item in rows[:limit]],
+        offset=offset,
+        has_more=len(rows) > limit,
+    )
 
 
 @app.get("/internal/action-requests/review", response_model=ReviewQueueRead)
@@ -86,8 +177,11 @@ def require_scope(scope: str, authorization: str | None) -> None:
     billing_token = os.getenv("CRM_BILLING_READ_TOKEN")
     request_token = os.getenv("CRM_BILLING_REQUEST_TOKEN")
     execute_token = os.getenv("CRM_BILLING_EXECUTE_TOKEN")
+    escalation_token = os.getenv("CRM_ESCALATION_WRITE_TOKEN")
     configured = [
-        token for token in (account_token, billing_token, request_token, execute_token) if token
+        token
+        for token in (account_token, billing_token, request_token, execute_token, escalation_token)
+        if token
     ]
     if len(configured) != len(set(configured)):
         raise HTTPException(status_code=503, detail="CRM unavailable")
@@ -96,6 +190,7 @@ def require_scope(scope: str, authorization: str | None) -> None:
         "billing": ("CRM_BILLING_READ_TOKEN",),
         "request": ("CRM_BILLING_REQUEST_TOKEN",),
         "execute": ("CRM_BILLING_EXECUTE_TOKEN",),
+        "escalation": ("CRM_ESCALATION_WRITE_TOKEN",),
     }[scope]
     valid_tokens = [os.getenv(name) for name in names]
     if not any(valid_tokens):

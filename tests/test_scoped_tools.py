@@ -8,7 +8,13 @@ import pytest
 
 from support_system import scoped_tools
 from support_system.contracts import BillingRequestInput
-from support_system.scoped_tools import BillingTool, LogisticsTool, TechnicalTool, ToolFailure
+from support_system.scoped_tools import (
+    BillingTool,
+    EscalationTool,
+    LogisticsTool,
+    TechnicalTool,
+    ToolFailure,
+)
 
 
 class FakeResponse:
@@ -250,6 +256,45 @@ def test_billing_decision_and_execution_use_separate_credentials(monkeypatch):
     assert calls[0].full_url.endswith(f"/cancellation/{request_id}/decision")
     assert calls[1].full_url.endswith(f"/cancellation/{request_id}/execute")
     assert json.loads(calls[1].data) == {"conversation_id": str(conversation_id)}
+
+
+def test_escalation_adapter_uses_distinct_scope_and_validates_owner(monkeypatch):
+    customer_id, conversation_id, ticket_id = (uuid4() for _ in range(3))
+    monkeypatch.setenv("CRM_ESCALATION_WRITE_TOKEN", "ticket-only-secret")
+    monkeypatch.setenv("CRM_API_URL", "http://crm.test:8000")
+    calls = []
+
+    def fake_open(request, timeout):
+        calls.append(request)
+        return FakeResponse(
+            {
+                "ticket_id": str(ticket_id),
+                "customer_id": str(customer_id),
+                "conversation_id": str(conversation_id),
+                "summary": "human_requested",
+                "priority": "normal",
+                "status": "open",
+                "created_at": "2026-10-08T00:00:00Z",
+            }
+        )
+
+    monkeypatch.setattr(scoped_tools, "urlopen", fake_open)
+    result = EscalationTool().create(customer_id, conversation_id, "human_requested")
+    assert result.ticket_id == ticket_id
+    assert calls[0].get_header("Authorization") == "Bearer ticket-only-secret"
+    assert json.loads(calls[0].data) == {
+        "conversation_id": str(conversation_id),
+        "reason": "human_requested",
+    }
+
+    def wrong_owner(request, timeout):
+        return FakeResponse(
+            {**json.loads(fake_open(request, timeout).value), "customer_id": str(uuid4())}
+        )
+
+    monkeypatch.setattr(scoped_tools, "urlopen", wrong_owner)
+    with pytest.raises(ToolFailure, match="invalid_response"):
+        EscalationTool().create(customer_id, conversation_id, "human_requested")
 
 
 @pytest.mark.parametrize(

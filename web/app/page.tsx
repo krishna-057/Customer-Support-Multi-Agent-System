@@ -21,6 +21,7 @@ type Answer = {
   answer: string;
   evidence: Evidence[];
   escalation_reason: string | null;
+  ticket_id: string | null;
 };
 type Entry = { id: string; role: "customer" | "support"; text: string; answer?: Answer };
 
@@ -82,7 +83,7 @@ export default function Home() {
       const response = await fetch("/api/messages", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${session.trim()}` },
-        body: JSON.stringify({ message, ...(orderId.trim() ? { order_id: orderId.trim() } : {}) }),
+        body: JSON.stringify({ message, conversation_id: crypto.randomUUID(), ...(orderId.trim() ? { order_id: orderId.trim() } : {}) }),
         signal: controller.signal,
       });
       if (!response.ok || !response.body) {
@@ -162,7 +163,7 @@ export default function Home() {
                   <div className="message-meta">{entry.role === "customer" ? "You" : "Support"}</div>
                   <div className="message-body">{entry.text}</div>
                   {entry.answer?.status === "escalated" && (
-                    <div className="escalation"><CircleAlert size={15} /> Specialist review requested</div>
+                    <div className="escalation"><CircleAlert size={15} /> Specialist review requested{entry.answer.ticket_id ? ` · Ticket ${entry.answer.ticket_id}` : ""}</div>
                   )}
                   {entry.answer?.evidence?.length ? (
                     <div className="evidence">

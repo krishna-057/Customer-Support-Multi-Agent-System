@@ -6,7 +6,7 @@ import os
 from collections.abc import Iterator
 from dataclasses import asdict
 from typing import Annotated, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
@@ -30,11 +30,18 @@ from support_system.contracts import (
     ServiceName,
     TechnicalAnswerRead,
     TechnicalQuestion,
+    TicketQueueRead,
 )
 from support_system.crm_models import SupportArticle
 from support_system.customer_identity import CustomerIdentity, require_customer_identity
 from support_system.db import database_url
-from support_system.scoped_tools import BillingTool, LogisticsTool, TechnicalTool, ToolFailure
+from support_system.scoped_tools import (
+    BillingTool,
+    EscalationTool,
+    LogisticsTool,
+    TechnicalTool,
+    ToolFailure,
+)
 from support_system.support_knowledge import answer_technical
 from support_system.workflow_graph import build_graph, run_message, stream_message
 from support_system.workflow_nodes import new_state
@@ -104,7 +111,23 @@ def customer_message(
     identity: Annotated[CustomerIdentity, Depends(require_customer_identity)],
 ) -> CustomerMessageRead:
     state = run_message(identity, request.message, order_id=request.order_id)
+    if state.get("intent") == "escalation":
+        _persist_escalation(identity, request, state)
     return _customer_response(state)
+
+
+def _persist_escalation(
+    identity: CustomerIdentity, request: CustomerMessageInput, state: dict
+) -> None:
+    try:
+        ticket = EscalationTool().create(
+            identity.customer_id,
+            request.conversation_id or uuid4(),
+            state.get("escalation_reason") or "human_review_required",
+        )
+    except ToolFailure as exc:
+        raise HTTPException(status_code=503, detail="Support handoff unavailable") from exc
+    state["ticket_id"] = str(ticket.ticket_id)
 
 
 def _customer_response(state: dict) -> CustomerMessageRead:
@@ -116,6 +139,7 @@ def _customer_response(state: dict) -> CustomerMessageRead:
         evidence=state.get("evidence", []),
         tracking=state.get("tracking"),
         escalation_reason=state.get("escalation_reason") if escalated else None,
+        ticket_id=state.get("ticket_id") if escalated else None,
     )
 
 
@@ -150,7 +174,11 @@ def customer_message_stream(
                         },
                     )
                 elif node == "escalation":
-                    yield _event("escalated", {"reason": state.get("escalation_reason")})
+                    _persist_escalation(identity, request, state)
+                    yield _event(
+                        "escalated",
+                        {"reason": state.get("escalation_reason"), "ticket_id": state["ticket_id"]},
+                    )
             yield _event("completed", _customer_response(state).model_dump(mode="json"))
         # Headers are already sent; terminate the stream without exposing backend details.
         except Exception:  # noqa: BLE001
@@ -161,6 +189,21 @@ def customer_message_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/v1/admin/tickets", response_model=TicketQueueRead)
+def review_escalations(
+    response: Response,
+    _admin: Annotated[AdminIdentity, Depends(require_admin_identity)],
+    authorization: Annotated[str, Header()],
+    offset: Annotated[int, Query(ge=0, le=1000)] = 0,
+) -> TicketQueueRead:
+    try:
+        queue = EscalationTool().list_open(authorization, offset=offset)
+    except ToolFailure as exc:
+        raise HTTPException(status_code=503, detail="Escalation queue unavailable") from exc
+    response.headers["Cache-Control"] = "no-store"
+    return queue
 
 
 def billing_checkpoint() -> Iterator[PostgresSaver]:

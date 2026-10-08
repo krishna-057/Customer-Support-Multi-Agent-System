@@ -84,7 +84,7 @@ export default function AdminReview() {
     <main className="admin-page">
       <header className="admin-header">
         <div className="admin-heading"><span className="brand-mark"><Shield size={18} /></span><div><h1>Review queue</h1><span>Billing actions</span></div></div>
-        <a className="back-link" href="/"><ArrowLeft size={16} /> Customer chat</a>
+        <div className="admin-links"><a className="back-link" href="/admin/escalations">Escalations</a><a className="back-link" href="/"><ArrowLeft size={16} /> Customer chat</a></div>
       </header>
       <section className="admin-content">
         <div className="admin-controls">

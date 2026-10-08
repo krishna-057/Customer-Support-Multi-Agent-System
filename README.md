@@ -41,7 +41,7 @@ issuer exists yet: for local use, supply a valid short-lived customer session
 from a trusted integration. The browser keeps it only in memory, and the proxy
 forwards it only to the configured agent API. No CRM or execution credential is
 exposed to the frontend. The admin approval queue is available at `/admin`;
-the escalation dashboard is not implemented yet.
+privacy-minimized open tickets can be reviewed at `/admin/escalations`.
 
 ## Local development
 
@@ -68,7 +68,7 @@ and reject send the decision to the existing authenticated resume endpoint;
 approval executes only the guarded local mock action. Sessions and review
 details are not cached by the browser proxies. There is no public login flow.
 
-Copy `.env.example` to ignored `.env` and replace the sample password, six
+Copy `.env.example` to ignored `.env` and replace the sample password, seven
 service tokens, and customer/admin session secrets with unique, distinct local values.
 Then run `docker compose up --build`. The CRM container applies migrations and inserts 37 synthetic
 customers and 20 versioned support articles on startup. PostgreSQL data is
@@ -133,8 +133,10 @@ tokens stay on the backend. The response omits internal handoff context.
 
 No public session issuer or login flow exists yet, so this endpoint is only
 usable with a session issued by a trusted integration. This message route has no
-checkpointer or conversation history; each message runs independently.
-Escalation is a response, not a persisted ticket. No billing action executes.
+checkpointer or conversation history; each message runs independently. On an
+escalation, the gateway creates a CRM ticket before reporting specialist review.
+The response includes its ticket ID. If the ticket write fails, the request
+fails closed rather than claiming a handoff. No billing action executes.
 
 `POST /v1/support/messages/stream` accepts the same body and signed customer
 session, returning `text/event-stream` for clients using a streaming `fetch`
@@ -146,6 +148,28 @@ Escalations emit `escalated` with a reason. Every successful stream ends with
 An unexpected backend failure ends with a sanitized `error` event instead.
 These are node-level events, not token-by-token text. The stream is not cached
 and never includes customer IDs, raw handoff state, or service credentials.
+Escalated streams include a ticket ID only after CRM accepts the write. Clients
+may supply a UUID `conversation_id` to make a repeated escalation request
+idempotent; the chat generates one for each submitted message. When omitted,
+the server generates one, so separate legacy retries can create separate tickets.
+
+### Escalation tickets
+
+The agent uses a dedicated `CRM_ESCALATION_WRITE_TOKEN` to call
+`POST /internal/customers/{customer_id}/tickets` with a conversation UUID and a
+bounded reason code. CRM checks the customer, enforces one ticket per customer
+and conversation, and returns the same ticket for an identical retry; a changed
+reason conflicts. Tickets store the reason code, priority, status, IDs, and time,
+not raw chat text, tool responses, or credentials. This is a triage record, not
+a full conversation transcript or resolution system.
+
+`GET /internal/tickets` and the agent's `GET /v1/admin/tickets?offset=0` require
+a signed administrator session. They return bounded pages of open tickets with
+`no-store` responses. The Next.js view at `/admin/escalations` uses a fixed
+same-origin proxy and keeps the signed session only in memory. There is no
+trusted login issuer, ticket assignment/closure flow, retention policy, or
+operator reply channel yet. Do not treat the view as a complete human support
+desk or a production deployment.
 
 `POST /v1/support/billing-requests` requires the same signed customer session
 and a structured body with a UUID `conversation_id`, `action` (`refund` or

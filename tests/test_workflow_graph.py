@@ -59,7 +59,9 @@ def test_technical_graph_requires_evidence():
         )
     )
     logistics = LogisticsStub()
-    state = run_message(identity(), "My login shows error 404", technical=technical, logistics=logistics)
+    state = run_message(
+        identity(), "My login shows error 404", technical=technical, logistics=logistics
+    )
     assert state["intent"] == "technical"
     assert state["answer"].endswith("[T-01]")
     assert state["evidence"][0]["article_id"] == "T-01"
@@ -79,7 +81,10 @@ def test_weak_evidence_and_upstream_failure_escalate():
         (ToolFailure("unavailable"), "technical_unavailable"),
     ):
         state = run_message(
-            identity(), "My app shows error 404", technical=TechnicalStub(result), logistics=logistics
+            identity(),
+            "My app shows error 404",
+            technical=TechnicalStub(result),
+            logistics=logistics,
         )
         assert state["intent"] == "escalation"
         assert state["answer"] == "A support specialist will review your request."
@@ -114,7 +119,8 @@ def test_gateway_requires_signed_identity_and_hides_handoff(monkeypatch):
     assert client.post("/v1/support/messages", json=request).status_code == 401
     assert (
         client.post(
-            "/v1/support/messages", json={**request, "customer_id": str(uuid4())},
+            "/v1/support/messages",
+            json={**request, "customer_id": str(uuid4())},
             headers={"Authorization": f"Bearer {issue_session(customer.customer_id, SECRET)}"},
         ).status_code
         == 422
@@ -140,6 +146,14 @@ def test_gateway_escalates_billing_without_service_call(monkeypatch):
     logistics = LogisticsStub()
     monkeypatch.setattr("support_system.workflow_graph.LogisticsTool", lambda: logistics)
     monkeypatch.setattr("support_system.workflow_graph.TechnicalTool", lambda: technical)
+    ticket_id = uuid4()
+
+    class Tickets:
+        def create(self, customer_id, conversation_id, reason):
+            assert reason == "billing_workflow_unavailable"
+            return type("Ticket", (), {"ticket_id": ticket_id})()
+
+    monkeypatch.setattr("support_system.agent_api.EscalationTool", Tickets)
     customer = identity()
     response = TestClient(app).post(
         "/v1/support/messages",
@@ -149,5 +163,6 @@ def test_gateway_escalates_billing_without_service_call(monkeypatch):
     assert response.status_code == 200
     assert response.json()["status"] == "escalated"
     assert response.json()["escalation_reason"] == "billing_workflow_unavailable"
+    assert response.json()["ticket_id"] == str(ticket_id)
     assert technical.calls == []
     assert logistics.calls == []

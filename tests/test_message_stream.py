@@ -92,6 +92,14 @@ def test_stream_escalates_tool_failure_without_leaking_handoff(monkeypatch):
             raise ToolFailure("unavailable")
 
     monkeypatch.setattr("support_system.workflow_graph.TechnicalTool", Technical)
+    ticket_id = uuid4()
+
+    class Tickets:
+        def create(self, customer_id, conversation_id, reason):
+            assert reason == "technical_unavailable"
+            return type("Ticket", (), {"ticket_id": ticket_id})()
+
+    monkeypatch.setattr("support_system.agent_api.EscalationTool", Tickets)
     response = TestClient(app).post(
         "/v1/support/messages/stream",
         json={"message": "My login has an error"},
@@ -107,6 +115,7 @@ def test_stream_escalates_tool_failure_without_leaking_handoff(monkeypatch):
     ]
     assert events[-1][1]["status"] == "escalated"
     assert events[-1][1]["escalation_reason"] == "technical_unavailable"
+    assert events[-1][1]["ticket_id"] == str(ticket_id)
     assert "handoff" not in response.text
 
 

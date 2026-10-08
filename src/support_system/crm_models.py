@@ -135,6 +135,9 @@ class CancellationRequest(Base):
 
 class SupportTicket(Base):
     __tablename__ = "support_tickets"
+    __table_args__ = (
+        UniqueConstraint("customer_id", "conversation_id", name="uq_support_ticket_conversation"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), nullable=False, index=True)
